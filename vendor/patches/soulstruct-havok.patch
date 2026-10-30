@@ -1,0 +1,197 @@
+diff --git a/src/soulstruct/havok/tagfile/structs.py b/src/soulstruct/havok/tagfile/structs.py
+index 7ec000a..877bdad 100644
+--- a/src/soulstruct/havok/tagfile/structs.py
++++ b/src/soulstruct/havok/tagfile/structs.py
+@@ -64,7 +64,7 @@ class TagFileItem:
+         if self.hk_type is None:
+             raise ValueError("Tried to get item type before setting it.")
+         tag_data_type = self.hk_type.get_tag_data_type()
+-        if tag_data_type == TagDataType.CharArray:
++        if tag_data_type in {TagDataType.CharArray, TagDataType.ConstCharArray}:  # local patch: hk2018 hkStringPtr
+             # noinspection PyUnresolvedReferences
+             return self.hk_type.get_data_type()
+         elif tag_data_type == TagDataType.Array:  # hkArray_
+diff --git a/src/soulstruct/havok/types/base.py b/src/soulstruct/havok/types/base.py
+index 71d2ccd..fc13eb8 100644
+--- a/src/soulstruct/havok/types/base.py
++++ b/src/soulstruct/havok/types/base.py
+@@ -900,11 +900,32 @@ class hkFlags_(hk):
+     # `__hsh` is set dynamically (probably never used).
+ 
+     # `local_members` and `members` (lone 'storage' member) are set dynamically.
++    storage_type = None  # type: type[hk]  # local patch: set by `hkFlags()` factory
+ 
+     @classmethod
+     def get_default_value(cls):
+         return 0
+ 
++    @classmethod
++    def get_type_info(cls, long_varints: bool) -> TypeInfo:
++        """Local patch: dynamic `hkFlags[...]` subclasses cannot see the name-mangled `__tag_format_flags` of
++        `hkFlags_`, so build their `TypeInfo` explicitly (mirrors `hkEnum_.get_type_info`)."""
++        type_info = TypeInfo("hkFlags")
++        type_info.py_class = cls
++        storage_name = cls.storage_type.__name__
++        type_info.templates = [
++            TemplateInfo("tBITS", type_py_name=storage_name),
++            TemplateInfo("tSTORAGE", type_py_name=storage_name),
++        ]
++        type_info.parent_type_py_name = storage_name
++        type_info.tag_format_flags = 0
++        return type_info
++
++    @classmethod
++    def get_type_hierarchy(cls) -> list[type[hk]]:
++        # noinspection PyTypeChecker
++        return list(cls.__mro__[:-3])  # exclude this, `hk`, and `object`
++
+ 
+ # region Type Factory Functions
+ 
+@@ -1090,6 +1111,8 @@ def hkFlags(storage_type: HK_TYPE, hsh: int = None) -> type[hkFlags_]:
+     flags_type.alignment = storage_type.alignment
+     flags_type.byte_size = storage_type.byte_size
+     flags_type.tag_type_flags = storage_type.tag_type_flags
++    flags_type.storage_type = storage_type  # local patch (see `hkFlags_.get_type_info`)
++    flags_type.set_tag_format_flags(0)
+     flags_type.set_hsh(hsh)
+     flags_type.local_members = (
+         Member(0, "storage", storage_type, MemberFlags.Protected),
+diff --git a/src/soulstruct/havok/types/hk2010/__init__.py b/src/soulstruct/havok/types/hk2010/__init__.py
+index eb5fa15..6c24062 100644
+--- a/src/soulstruct/havok/types/hk2010/__init__.py
++++ b/src/soulstruct/havok/types/hk2010/__init__.py
+@@ -10,6 +10,10 @@ from .hkAabb import hkAabb
+ from .hkLocalFrame import hkLocalFrame
+ from .hkMoppBvTreeShapeBase import hkMoppBvTreeShapeBase
+ from .hkMotionState import hkMotionState
++from .hkMemoryResourceContainer import (
++    hkResourceBase, hkResourceContainer, hkResourceHandle, hkMemoryResourceHandleExternalLink,
++    hkMemoryResourceHandle, hkMemoryResourceContainer,
++)  # local addition
+ from .hkMultiThreadCheck import hkMultiThreadCheck
+ from .hkRootLevelContainer import hkRootLevelContainer
+ from .hkRootLevelContainerNamedVariant import hkRootLevelContainerNamedVariant
+diff --git a/src/soulstruct/havok/types/hk2010/hkMemoryResourceContainer.py b/src/soulstruct/havok/types/hk2010/hkMemoryResourceContainer.py
+new file mode 100644
+index 0000000..21328c0
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2010/hkMemoryResourceContainer.py
+@@ -0,0 +1,117 @@
++"""Local addition: Havok 2010 resource-container types.
++
++These appear in animations exported with the Havok Content Tools (e.g. community-made FromSoft mod animations) as an
++extra 'Resource Data' named variant in the root container. FromSoft's own files never contain them, so Soulstruct did
++not define them. Layouts follow the Havok 2010.2 SDK (32-bit):
++
++    hkResourceBase : hkReferencedObject                  (8 bytes, no members)
++    hkResourceContainer : hkResourceBase                 (8 bytes, no members)
++    hkResourceHandle : hkResourceBase                    (8 bytes, no members)
++    hkMemoryResourceHandle::ExternalLink                 (8 bytes: memberName, externalId)
++    hkMemoryResourceHandle : hkResourceHandle            (28 bytes: variant @8, name @12, references @16)
++    hkMemoryResourceContainer : hkResourceContainer      (40 bytes: name @8, parent @12, resourceHandles @16, children @28)
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkResourceBase(hkReferencedObject):
++    alignment = 4
++    byte_size = 8
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++
++    local_members = ()
++    members = hkReferencedObject.members
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkResourceContainer(hkResourceBase):
++    alignment = 4
++    byte_size = 8
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++
++    local_members = ()
++    members = hkResourceBase.members
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkResourceHandle(hkResourceBase):
++    alignment = 4
++    byte_size = 8
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++
++    local_members = ()
++    members = hkResourceBase.members
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkMemoryResourceHandleExternalLink(hk):
++    alignment = 4
++    byte_size = 8
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++    __real_name = "hkMemoryResourceHandle::ExternalLink"
++
++    local_members = (
++        Member(0, "memberName", hkStringPtr),
++        Member(4, "externalId", hkStringPtr),
++    )
++    members = local_members
++
++    memberName: str
++    externalId: str
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkMemoryResourceHandle(hkResourceHandle):
++    alignment = 4
++    byte_size = 28
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++
++    local_members = (
++        Member(8, "variant", hkRefVariant),
++        Member(12, "name", hkStringPtr),
++        Member(16, "references", hkArray(hkMemoryResourceHandleExternalLink)),
++    )
++    members = hkResourceHandle.members + local_members
++
++    variant: hkReferencedObject
++    name: str
++    references: list[hkMemoryResourceHandleExternalLink]
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkMemoryResourceContainer(hkResourceContainer):
++    alignment = 4
++    byte_size = 40
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++
++    local_members = (
++        Member(8, "name", hkStringPtr),
++        Member(12, "parent", Ptr(DefType("hkMemoryResourceContainer", lambda: hkMemoryResourceContainer)),
++               MemberFlags.NotSerializable),
++        Member(16, "resourceHandles", hkArray(Ptr(hkMemoryResourceHandle))),
++        Member(28, "children", hkArray(Ptr(DefType("hkMemoryResourceContainer", lambda: hkMemoryResourceContainer)))),
++    )
++    members = hkResourceContainer.members + local_members
++
++    name: str
++    parent: hkMemoryResourceContainer
++    resourceHandles: list[hkMemoryResourceHandle]
++    children: list[hkMemoryResourceContainer]

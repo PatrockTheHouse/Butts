@@ -1,0 +1,9 @@
+# vendored libraries are fetched by vendor/setup.sh at pinned commits
+vendor/soulstruct/
+vendor/soulstruct-havok/
+vendor/constrata/
+vendor/paramdex/
+vendor/dsanimstudio/
+vendor/shims/
+__pycache__/
+*.pyc
