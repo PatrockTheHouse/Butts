@@ -52,17 +52,60 @@ Free crossbow-range weapon IDs: 39 bases in 43100000–43490000 (step 10000). Fr
 Changed meaning: **300** (DS1 ChrActionGradient → ER ActivateJumpTableEarly). ER payloads are supersets (extra fields). ChrActionFlag IDs (4 RH cancel, 11 movement cancel, 25/26 dodge, 32 generic cancel, 87 common input…) are identical in both games; ER adds 103–121 (WA, quick-goods, R1/R2/L1/L2 cancels).
 ER-only events of interest: 34/35 Un/EquipCrossbowBolt, 238 SetBulletAimAngle, 320 PlayerInputCheck, 609 playback conditioned on SpEffect, 700 EnableTwistModifier (torso aim), 902 ride turning, 712 OverrideWeaponModelLocations.
 
-### ER crossbow slot families (TAE a46, 79 entries)
-| IDs | Meaning (by event content) |
+### ER TAE (0x1000D) layout rules — `tools/tae3.py` (byte-identical on all 687 vanilla player TAEs)
+Header 0xD0; strings (skeleton `skeleton.hkt`, sib `c9990.SIB`) padded to 16; animation table (q id, q offset);
+animation *groups* = maximal runs of consecutive animation ids (count, entries `<iiQ>` first id, last id, table
+offset); 48-byte animation structs; per animation: file record `<QQQii>` (type, +16, name offset, a, b) + 16-byte
+tail, UTF-16 name (padded to 16 only when non-empty), unique sorted float32 times (padded), event headers `<QQQ>`
+(start-time ptr, end-time ptr, data ptr), event data `<qQ>` (type, payload ptr) + payload (contiguous), event
+groups `<QQQQ>` (count, index ptr, type ptr, 0) + per group `<QQ>` (type, 0) and i32 header offsets.
+Payload sizes vary per instance (padded); the last payload is ambiguous by 8 bytes → `data/er_tae_event_sizes.json`
+(measured modal sizes) decides. Event-group "families" (`tae3.GROUP_FAMILY`): 34/35→32, 119→96, 129→128, 238→232,
+605→605… Animation file record: type 0 = standard (a = flags, `0x100` imports the HKX of animation b = cat·1,000,000 +
+id, name still spelled `aXXX_YYYYYY.hkt`); type 1 = reference to another animation's events (a = full id).
+Cross-category imports are normal (a235 Spread Crossbow imports `46033030` from a46); partial override TAEs
+(`spAtkcategory`) define only the animations they change, the rest falls back to `wepmotionCategory`.
+`tools/tae_events.py` encodes/decodes payloads by DSAnimStudio field names; `tools/tae_dump.py` prints them.
+
+### ER crossbow slots (TAE a46) — names from Smithbox's `Behavior-c0000-c0000.json` aliases
+| IDs | State |
 |---|---|
-| 31030/31040/31050 | one-handed fire (loaded) — same HKX, turn-speed variants |
-| 31060 | one-handed melee bash |
-| 31070–31072, 31081–31082 | fire-from-unloaded (reload stitched in), **jump fire** + landings |
-| 33xxx | two-handed mirror of all the above |
-| 37000–37040 (+371xx, 373xx, 375xx, 376xx, 378xx) | **L1 aim stance**: fire / idle / transitions / reload (35 + 238) / exit; variants incl. **left hand** (judge 56, HandType 0) |
-| 39700–39740 | **mounted** fire / idle / reload / exit (events 902, 712) |
-| 200800, 2012x0, 201400 | misc / switch |
-Bullets are spawned via behavior judge **55** (right) / **56** (left) → resolved through the equipped ammo's `behaviorVariationId`.
+| 310x0 / 330x0 (x = 3 N, 4 F, 5 D) | **jump attack** neutral / forward / dash (R1 while airborne), bullet at 0.433 s; 330x1 = left-hand 2H |
+| 31060 / 33060 | jump-loop attack (long fall) — melee swings |
+| 31070 / 33070 (33073 left) | jump **land** attack (fire on landing); 31071/72, 31081/82 landing ends (idle / high / low) |
+| 37000 / 37100 / 37300 | `AttackCrossbow{Right,BothRight,Left}Fire` — bullet at frame 0, `UnequipCrossbowBolt` |
+| 37010 / 37110 / 37310 | `…Start` (raise ~0.5 s) → Loop if held, else Fire |
+| 37020 / 37120 / 37320 | `…Loop Upper` (aim hold); 37025/37125/37325 `…Move Loop Upper` (walking) |
+| 37030 / 37130 / 37330 | `…Reload` (`EquipCrossbowBolt` at 0.5 s → `GetBoltLoadingState`) |
+| 37040 / 37140 / 37340 | `…Empty` (`IsOutOfAmmo`) |
+| 37101 / 37131 | left-hand two-handing Fire / Reload |
+| 375xx / 376xx / 378xx | stealth (crouch) versions of 370xx / 371xx / 373xx |
+| 39700–39740 (39701/39731 variants) | mounted Fire / Start / Start-continue / Loop / Reload; 38100–38200 ride R2 / ride jump |
+HKS flow (`AttackCrossbowRightStart_Upper_onUpdate` etc.): Start plays to `IsAnimEnd` (or `EventEzStateFlag 0`,
+TAE event 227) → `ActionDuration(R1) > 0` ? Loop : Fire; Loop → Fire the frame R1 is released; R1 with the bolt
+unloaded → Reload, with no ammo → Empty; R2 = same path with ammo slot 2 (`g_ArrowSlot`). Jump attacks need
+`GetBoltLoadingState` true. **Hold-to-fire trick**: put the firing clip (with its `BulletBehavior`s) in the Loop
+slots — events re-fire every loop cycle — and leave `UnequipCrossbowBolt` out of Fire so the bolt state stays loaded.
+Bullets: `BulletBehavior` judge → `BehaviorParam_PC 1_VVVVV_JJJ` with VVVVV = the **ammo's** `behaviorVariationId`
+(Bolt 5200 → 105200300 → Bullet 20007000); vanilla judges 300 (fire), 310/320–324/330/340–342 (bows, spread),
+500/505 (Repeating Fire art, a935 40060: 12 bullets from one unequip — bullets do not need the loaded state).
+`DummyPolyID` 55 = the crossbow model's bolt dummy (ballista 177); FFX dummies `10000 + N` = weapon dummy N.
+ChrActionFlag ids: 4 cancel RH, 11 cancel movement, 16/22 cancel LH/guard, 25/30 input dodge/goods, 26/29/31/32
+cancel dodge/magic/goods/jump, 87 input common, 90/91 walk/dash speed limit, 103–108 WA/quick-goods, 134 falling.
+SpEffect 100130 = `[HKS] Stance - SetMoveType 1` (aim-walk). Havok variable 9 = 1 in the 2H family, var 0 ramps
+0→1 at the end of full-body clips (`SetTimeActEditorHavokVariable`, 605).
+
+### Binders — `tools/bnd4.py` (byte-identical on c0000.anibnd and regulation)
+BND4 (`07D7R6`): 64-byte header (count @0xC, header size 0x40, entry size, data offset, unicode, raw format
+byte — bit-reversed when byte 0x0A is set — extended 4 = path hash table, hash table offset @0x38); entries
+(flags 0x40, i32 -1, q compressed size, q uncompressed size [Compression flag], I/q data offset [LongOffsets], i32 id,
+I name offset); UTF-16 names; hash table (q hashes offset, i32 bucket count = first prime ≥ count/7, 0x00080810,
+buckets (count, first index), entries (**hash u32, index i32**) grouped by `hash % buckets`, hash = Σ c·37 over the
+lower-cased `/`-separated path with a leading `/`); file data in entry order, 16-aligned (empty files not padded).
+Player anibnd ids: TAE = 5000000 + category, Skeleton 4000000, `c0000_a?x.txt` div placeholders 6000000+;
+animation HKX in the `c0000_a?x.anibnd.dcx` divs with id = category·1,000,000 + animation (DS1: category·10,000 + id,
+and the DS1 engine finds HKX in any loaded div). DCX/DFLT (zlib level 9, header 0x4C) is accepted by Elden Ring.
+ER `.param` files carry **no ParamType string**; `er_param.py` maps file names to Paramdex defs (`DEF_ALIASES`).
 
 ## 4. Ashes of War (verified in regulation + HKS)
 * Gem (`EquipParamGem`) → `swordArtsParamId` → `SwordArtsParam` row → **art ID** (u16 @ offset 24) → **TAE a(600 + artID)** holding the skill animations (one TAE per art; 304 present a600–a999).

@@ -17,9 +17,56 @@ BIT_LIMIT = {"u8": 8, "s8": 8, "dummy8": 8, "u16": 16, "s16": 16, "u32": 32, "s3
 DEF_RE = re.compile(r"^\s*(\w+)\s+(\w+)(?:\[(\d+)\])?(?::(\d+))?(?:\s*=\s*(.+?))?\s*$")
 
 
-def load_def(def_name: str):
+_DEF_BY_TYPE: dict[str, Path] | None = None
+
+# Elden Ring params whose file name differs from their paramdef file name (ER params carry no ParamType string).
+DEF_ALIASES = {
+    "AtkParam_Pc": "AtkParam", "AtkParam_Npc": "AtkParam", "BehaviorParam_PC": "BehaviorParam",
+    "Bullet": "BulletParam", "Magic": "MagicParam", "SpEffectParam": "SpEffect", "SpEffectVfxParam": "SpEffectVfx",
+    "ItemLotParam_enemy": "ItemLotParam", "ItemLotParam_map": "ItemLotParam",
+    "GrassTypeParam_Lv1": "GrassTypeParam", "GrassTypeParam_Lv2": "GrassTypeParam",
+    "ShopLineupParam_Recipe": "ShopLineupParam", "MenuValueTableParam": "MenuValueTableSpecParam",
+    "AssetEnvironmentGeometryParam": "AssetGeometryParam", "MapGdRegionInfoParam": "MapGdRegionInfo",
+    "WwiseValueToStrParam_BgmBossChrIdConv": "WwiseValueToStrConvertParamFormat",
+}
+
+
+def def_path_for(def_name: str, param_type: str | None = None) -> Path:
+    """Paramdex def file for a param: by file name (EquipParamWeapon.xml), alias table, or ParamType string."""
+    global _DEF_BY_TYPE
+    direct = PARAMDEX / "Defs" / f"{def_name}.xml"
+    if direct.exists():
+        return direct
+    alias = DEF_ALIASES.get(def_name) or re.sub(r"_(ps4|ps5|xboxone|scarlett)$", "", def_name)
+    if alias != def_name and (PARAMDEX / "Defs" / f"{alias}.xml").exists():
+        return PARAMDEX / "Defs" / f"{alias}.xml"
+    if _DEF_BY_TYPE is None:
+        _DEF_BY_TYPE = {}
+        for x in (PARAMDEX / "Defs").glob("*.xml"):
+            try:
+                t = ET.parse(x).getroot().findtext("ParamType")
+            except ET.ParseError:
+                continue
+            if t:
+                _DEF_BY_TYPE[t] = x
+    if param_type and param_type in _DEF_BY_TYPE:
+        return _DEF_BY_TYPE[param_type]
+    raise FileNotFoundError(f"no paramdef for {def_name} (type {param_type!r})")
+
+
+def param_type_of(buf: bytes) -> str:
+    """ParamType string stored in a 64-bit PARAM header."""
+    flags2d = buf[0x2D]
+    if flags2d & 0x80:  # OffsetParamType
+        off = struct.unpack_from("<Q", buf, 0x30)[0]
+        end = buf.index(b"\0", off)
+        return buf[off:end].decode("ascii", errors="replace")
+    return buf[0x40:0x60].split(b"\0")[0].decode("ascii", errors="replace")
+
+
+def load_def(def_name: str, param_type: str | None = None):
     """def_name like 'EquipParamWeapon'. Returns (param_type, fields)."""
-    root = ET.parse(PARAMDEX / "Defs" / f"{def_name}.xml").getroot()
+    root = ET.parse(def_path_for(def_name, param_type)).getroot()
     ptype = root.findtext("ParamType")
     fields = []
     for f in root.iter("Field"):
@@ -81,7 +128,7 @@ def load_names(def_name: str) -> dict[int, str]:
 
 class ERParam:
     def __init__(self, buf: bytes, def_name: str):
-        self.ptype, self.fields = load_def(def_name)
+        self.ptype, self.fields = load_def(def_name, param_type_of(buf))
         self.names = load_names(def_name)
         strings_off = struct.unpack_from("<I", buf, 0)[0]
         self.row_count = struct.unpack_from("<H", buf, 0x0A)[0]
