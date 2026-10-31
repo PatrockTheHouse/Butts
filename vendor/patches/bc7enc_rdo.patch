@@ -1,0 +1,12 @@
+diff --git a/ert.h b/ert.h
+index d387f52..4eb3fcc 100644
+--- a/ert.h
++++ b/ert.h
+@@ -9,6 +9,7 @@
+ #include <time.h>
+ #include <vector>
+ #include <string>
++#include <cstdint>
+ 
+ namespace ert
+ {

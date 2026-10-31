@@ -4,22 +4,30 @@ mip chains (Pillow's BC encoders), and rewrite legacy DDS headers as DX10 (sRGB/
     import dds_tools as D
     rgba = D.decode(dds_bytes)                      # (H, W, 4) uint8
     dds  = D.encode(rgba, "DXT5", mipmaps=True)      # legacy-header DDS, mips down to 1x1
+    dds  = D.encode(rgba, "BC7", srgb=True)          # DX10 BC7_UNORM_SRGB (needs vendor/bc7enc_rdo)
     dds  = D.to_dx10(dds, srgb=True)                 # same payload with a DX10 header (BC1/BC3_UNORM[_SRGB], BC5_UNORM)
     info = D.header_info(dds)                        # dict(width, height, mipmaps, fourcc, dxgi_format, block_bytes)
 
     python tools/dds_tools.py info FILE.dds
     python tools/dds_tools.py png FILE.dds OUT.png
 
-Only block-compressed formats are handled for encoding (BC1 = DXT1, BC3 = DXT5, BC5 = ATI2); decoding covers
-whatever Pillow's DDS plugin reads (DXT1/3/5, BC4/5/6/7, uncompressed). BC7 encoding is not available here.
+Encoding: BC1 (DXT1), BC3 (DXT5), BC4, BC5, BC7 — through the vendored bc7enc_rdo CLI when built (vendor/setup.sh),
+BC1/BC3/BC5 through Pillow otherwise. Decoding covers whatever Pillow's DDS plugin reads (DXT1/3/5, BC4/5/6/7,
+uncompressed; DX10 sRGB BC1-5 headers are routed through their legacy form).
 """
 import io
+import os
 import struct
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+# richgel999/bc7enc_rdo CLI (built by vendor/setup.sh): BC1/BC3/BC4/BC5/BC7 encoding; Pillow is the fallback.
+BC7ENC = Path(os.environ.get("MODKIT_BC7ENC", Path(__file__).resolve().parent.parent / "vendor" / "bc7enc_rdo" / "build" / "bc7enc"))
 
 DDS_MAGIC = b"DDS "
 DDSD_CAPS, DDSD_HEIGHT, DDSD_WIDTH, DDSD_PITCH, DDSD_PIXELFORMAT, DDSD_MIPMAPCOUNT, DDSD_LINEARSIZE = (
@@ -76,7 +84,7 @@ def decode(dds: bytes) -> np.ndarray:
     return np.asarray(im.convert("RGBA"))
 
 
-def _encode_level(rgba: np.ndarray, fmt: str) -> bytes:
+def _encode_level_pillow(rgba: np.ndarray, fmt: str) -> bytes:
     """Encode one level with Pillow and strip its 128-byte legacy header."""
     mode_img = Image.fromarray(rgba, "RGBA")
     if fmt == "BC5":
@@ -86,6 +94,33 @@ def _encode_level(rgba: np.ndarray, fmt: str) -> bytes:
     data = buf.getvalue()
     assert data[:4] == DDS_MAGIC
     return data[128:]
+
+
+_BC7ENC_FLAG = {"BC1": "-1", "BC3": "-3", "BC4": "-4", "BC5": "-5", "BC7": None}
+
+
+def _encode_level_bc7enc(rgba: np.ndarray, fmt: str, quality: int = 4) -> bytes:
+    """Encode one level with bc7enc (DX10 DDS out, 148-byte header stripped)."""
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "in.png"
+        dst = Path(td) / "out.dds"
+        Image.fromarray(rgba, "RGBA").save(src)
+        args = [str(BC7ENC), "-q", "-g", "-f"]
+        if _BC7ENC_FLAG[fmt]:
+            args.append(_BC7ENC_FLAG[fmt])
+        else:
+            args.append(f"-u{quality}")
+        args += [str(src), str(dst)]
+        r = subprocess.run(args, capture_output=True, text=True)
+        if r.returncode != 0 or not dst.exists():
+            raise RuntimeError(f"bc7enc failed: {r.stdout[-400:]} {r.stderr[-400:]}")
+        data = dst.read_bytes()
+    assert data[:4] == DDS_MAGIC and data[0x54:0x58] == b"DX10"
+    return data[148:]
+
+
+def bc7enc_available() -> bool:
+    return BC7ENC.exists() and os.access(BC7ENC, os.X_OK)
 
 
 def mip_chain(rgba: np.ndarray, mipmaps: bool = True) -> list[np.ndarray]:
@@ -101,14 +136,26 @@ def mip_chain(rgba: np.ndarray, mipmaps: bool = True) -> list[np.ndarray]:
     return levels
 
 
-def encode(rgba: np.ndarray, fmt: str = "DXT5", mipmaps: bool = True) -> bytes:
-    """RGBA (H, W, 4) uint8 -> legacy-header DDS (fourcc DXT1/DXT5/ATI2) with a full mip chain."""
-    fourcc = {"DXT1": b"DXT1", "BC1": b"DXT1", "DXT5": b"DXT5", "BC3": b"DXT5", "BC5": b"ATI2", "ATI2": b"ATI2"}[fmt]
-    pil_fmt = {b"DXT1": "DXT1", b"DXT5": "DXT5", b"ATI2": "BC5"}[fourcc]
+def encode(rgba: np.ndarray, fmt: str = "DXT5", mipmaps: bool = True, srgb: bool = False, dx10: bool | None = None,
+           quality: int = 4) -> bytes:
+    """RGBA (H, W, 4) uint8 -> DDS with a full mip chain.
+
+    fmt: DXT1/BC1, DXT5/BC3, BC4, BC5/ATI2, BC7. BC7 (and BC4) need the vendored bc7enc; BC1/BC3/BC5 use it when
+    present and Pillow otherwise. Output has a legacy fourcc header for BC1/3/5 unless `dx10` is set (BC7 and sRGB
+    always DX10). `srgb` selects the *_UNORM_SRGB DXGI format (BC1/BC3/BC7 only).
+    """
+    canon = {"DXT1": "BC1", "BC1": "BC1", "DXT5": "BC3", "BC3": "BC3", "BC4": "BC4", "BC5": "BC5", "ATI2": "BC5", "BC7": "BC7"}[fmt]
+    fourcc = {"BC1": b"DXT1", "BC3": b"DXT5", "BC4": b"ATI1", "BC5": b"ATI2", "BC7": b"DX10"}[canon]
+    use_bc7enc = bc7enc_available() and canon in _BC7ENC_FLAG
+    if canon in ("BC7", "BC4") and not use_bc7enc:
+        raise RuntimeError(f"{canon} encoding needs vendor/bc7enc_rdo/build/bc7enc (run vendor/setup.sh with cmake + g++)")
     levels = mip_chain(np.ascontiguousarray(rgba, dtype=np.uint8), mipmaps)
-    payload = b"".join(_encode_level(lv, pil_fmt) for lv in levels)
+    if use_bc7enc:
+        payload = b"".join(_encode_level_bc7enc(lv, canon, quality) for lv in levels)
+    else:
+        payload = b"".join(_encode_level_pillow(lv, {"BC1": "DXT1", "BC3": "DXT5", "BC5": "BC5"}[canon]) for lv in levels)
     h, w = rgba.shape[:2]
-    block = BLOCK_FORMATS[fourcc][0]
+    block = 8 if canon in ("BC1", "BC4") else 16
     linear_size = max(1, (w + 3) // 4) * max(1, (h + 3) // 4) * block
     flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_LINEARSIZE
     caps = DDSCAPS_TEXTURE
@@ -119,6 +166,13 @@ def encode(rgba: np.ndarray, fmt: str = "DXT5", mipmaps: bool = True) -> bytes:
     hdr += struct.pack("<II4s5I", 32, DDPF_FOURCC, fourcc, 0, 0, 0, 0, 0)
     hdr += struct.pack("<5I", caps, 0, 0, 0, 0)
     assert len(hdr) == 128
+    if canon == "BC7" or srgb or dx10:
+        dxgi = {"BC1": (71, 72), "BC3": (77, 78), "BC4": (80, None), "BC5": (83, None), "BC7": (98, 99)}[canon][1 if srgb else 0]
+        if dxgi is None:
+            raise ValueError(f"{canon} has no sRGB variant")
+        hdr = bytearray(hdr)
+        hdr[0x54:0x58] = b"DX10"
+        return bytes(hdr) + struct.pack("<5I", dxgi, 3, 0, 1, 0) + payload
     return hdr + payload
 
 

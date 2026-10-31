@@ -20,6 +20,7 @@ PINS=(
   "https://github.com/soulsmods/Paramdex         paramdex            ff7245e524329bc3eab00036723d2bd53384cedf"
   "https://github.com/Meowmaritus/DSAnimStudio   dsanimstudio        f1bff06cd422de991b0a0fa8a2da81db43417318"
   "https://github.com/powzix/ooz                 ooz                 05038060aa68f9187ae9923b2388ca8db40e58d1"
+  "https://github.com/richgel999/bc7enc_rdo      bc7enc_rdo          b943862e6c1b7af5b2a7f57a8ba9cfe5a3ef4e3e"
 )
 
 UPDATE=0
@@ -87,6 +88,23 @@ if [[ ! -x ooz/oozdec || $UPDATE -eq 1 || ooz/oozdec -ot "$HERE/patches/ooz-linu
   fi
 fi
 
+# bc7enc_rdo (BC1/BC3/BC4/BC5/BC7 texture encoder, MIT): one missing <cstdint> include; built with CMake into
+# bc7enc_rdo/build/bc7enc, which tools/dds_tools.py uses for BC7 (and better BC1/BC3) encoding when present.
+if git -C bc7enc_rdo apply --check --reverse "$HERE/patches/bc7enc_rdo.patch" 2>/dev/null; then
+  echo "[vendor] bc7enc_rdo patch already applied"
+else
+  git -C bc7enc_rdo apply "$HERE/patches/bc7enc_rdo.patch"
+  echo "[vendor] applied bc7enc_rdo patch"
+fi
+if [[ ! -x bc7enc_rdo/build/bc7enc || $UPDATE -eq 1 ]]; then
+  if command -v cmake >/dev/null && command -v g++ >/dev/null; then
+    echo "[vendor] building bc7enc_rdo/build/bc7enc"
+    (mkdir -p bc7enc_rdo/build && cd bc7enc_rdo/build && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 && make -j"$(nproc)" >/dev/null 2>&1)
+  else
+    echo "[vendor] WARNING: cmake/g++ not found; BC7 texture encoding unavailable (DXT1/DXT5 via Pillow still work)"
+  fi
+fi
+
 # --- shims ---------------------------------------------------------------------------------
 # Soulstruct imports these at module load but the toolkit never exercises them:
 #   rich      -> console/traceback decoration only
@@ -149,4 +167,4 @@ class frozendict(dict):
         d = dict(self); del d[k]; return frozendict(d)
 EOF
 
-echo "[vendor] done. Python needs: python>=3.13, numpy, scipy, cryptography; Node>=22.15 for ZSTD; g++ for KRAK."
+echo "[vendor] done. Python needs: python>=3.13, numpy, scipy, cryptography, pillow; Node>=22.15 for ZSTD; g++ for KRAK; cmake+g++ for BC7."

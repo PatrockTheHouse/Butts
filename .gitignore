@@ -6,5 +6,6 @@ vendor/paramdex/
 vendor/dsanimstudio/
 vendor/shims/
 vendor/ooz/
+vendor/bc7enc_rdo/
 __pycache__/
 *.pyc
