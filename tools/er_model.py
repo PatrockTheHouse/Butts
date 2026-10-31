@@ -469,25 +469,38 @@ def ds1_textures_to_er(diffuse: bytes | None, specular: bytes | None, bump: byte
     _em = glow map.
     """
     out = {}
+    size = None
     if diffuse is not None:
         d = dds_tools.decode(diffuse)
+        size = d.shape[:2]
         has_alpha = dds_tools.header_info(diffuse)["fourcc"] in (b"DXT5", b"DXT3") or bool((d[..., 3] < 250).any())
         out["_a"] = (d, "albedo_alpha" if has_alpha else "albedo")
     spec_gray = dds_tools.decode(specular)[..., :3].mean(axis=2) if specular is not None else None
     if bump is not None:
         n = dds_tools.decode(bump).copy()
+    elif size is not None:
+        # no bump map (DS1 "M[D]" diffuse-only material): flat normal
+        n = np.zeros((min(size[0], 64), min(size[1], 64), 4), np.uint8)
+        n[..., 0] = n[..., 1] = 128
+    else:
+        n = None
+    if n is not None:
         g = spec_gray
         if g is not None and g.shape != n.shape[:2]:
             from PIL import Image
             g = np.asarray(Image.fromarray(g.astype(np.uint8)).resize((n.shape[1], n.shape[0]), Image.Resampling.LANCZOS))
-        n[..., 2] = np.clip(g, 0, 255).astype(np.uint8) if g is not None else 128
-        n[..., 3] = np.clip(g, 0, 255).astype(np.uint8) if g is not None else 128
+        n[..., 2] = np.clip(g, 0, 255).astype(np.uint8) if g is not None else 60      # gloss
+        n[..., 3] = np.clip(g, 0, 255).astype(np.uint8) if g is not None else 40      # specular
         out["_n"] = (n, "normal")
     if spec_gray is not None:
         m = np.empty(spec_gray.shape + (4,), np.uint8)
         m[..., 0] = m[..., 1] = m[..., 2] = np.clip(spec_gray, 0, 255).astype(np.uint8)
         m[..., 3] = 255
         out["_m"] = (m, "metallic")
+    elif size is not None:
+        m = np.zeros((4, 4, 4), np.uint8)
+        m[..., 3] = 255
+        out["_m"] = (m, "metallic")                                                   # non-metal
     if glow is not None:
         out["_em"] = (dds_tools.decode(glow), "emissive")
     return out
