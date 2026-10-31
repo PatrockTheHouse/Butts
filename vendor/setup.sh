@@ -57,6 +57,15 @@ else
   echo "[vendor] applied soulstruct-havok patch"
 fi
 
+# soulstruct: read/write the Sekiro/Elden Ring FLVER unknown struct (`SekiroUnkStruct`) that upstream skips, so
+# FLVERs written for Elden Ring (version 0x2001A) carry it like the game's own files do.
+if git -C soulstruct apply --check --reverse "$HERE/patches/soulstruct.patch" 2>/dev/null; then
+  echo "[vendor] soulstruct patch already applied"
+else
+  git -C soulstruct apply "$HERE/patches/soulstruct.patch"
+  echo "[vendor] applied soulstruct patch"
+fi
+
 # ooz (open-source Oodle Kraken/Mermaid/Leviathan decompressor, MSVC-only upstream): Linux stdafx.h shim,
 # a seek-chunk-reset fix needed for FromSoftware's DCX KRAK streams, and the small `oozdec` CLI that
 # tools/dcx.py drives (oozdec IN OUT UNCOMPRESSED_SIZE). Decompression only; we write DCX as DFLT.

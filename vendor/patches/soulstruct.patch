@@ -1,0 +1,60 @@
+diff --git a/src/soulstruct/flver/core.py b/src/soulstruct/flver/core.py
+index 076b83b..67e28d9 100644
+--- a/src/soulstruct/flver/core.py
++++ b/src/soulstruct/flver/core.py
+@@ -151,6 +151,11 @@ class FLVER(GameFile):
+     f2_unk_x5d: int = 0
+     f2_unk_x68: int = 0
+ 
++    # Sekiro/Elden Ring (version >= 0x2001A) only: unknown struct stored right after the texture headers
++    # (`SekiroUnkStruct` in SoulsFormats). Two member lists; each member is (four shorts, int index).
++    sekiro_unk_members1: list[tuple[tuple[int, int, int, int], int]] = field(default_factory=list)
++    sekiro_unk_members2: list[tuple[tuple[int, int, int, int], int]] = field(default_factory=list)
++
+     # Cached MergedMesh generated from this FLVER. Must be cleared if FLVER is modified.
+     _cached_merged_mesh: MergedMesh | None = field(init=False, repr=False, default=None)
+ 
+@@ -341,7 +346,15 @@ class FLVER(GameFile):
+ 
+         textures = {i: Texture.from_flver2_reader(reader, encoding=encoding) for i in range(header.texture_count)}
+ 
+-        # TODO: Sekiro has an additional unknown structure here.
++        sekiro_unk_members1, sekiro_unk_members2 = [], []
++        if header.version >= FLVERVersion.Sekiro_EldenRing:
++            # `SekiroUnkStruct`: counts, absolute offsets to the two member arrays, 20 bytes of padding.
++            count1, count2, offset1, offset2 = reader.unpack("hhIIiiiii")[:4]
++            for count, offset, members in ((count1, offset1, sekiro_unk_members1), (count2, offset2, sekiro_unk_members2)):
++                with reader.temp_offset(offset):
++                    for _ in range(count):
++                        a, b, c, d, index, _zero = reader.unpack("hhhhii")
++                        members.append(((a, b, c, d), index))
+ 
+         for material in materials:
+             # Each texture is only assigned to ONE material. Texture is popped from `textures` after first assignment.
+@@ -367,6 +380,8 @@ class FLVER(GameFile):
+             bones=bones,
+             meshes=meshes,
+             bounding_box=AABB(header.bounding_box_min, header.bounding_box_max),
++            sekiro_unk_members1=sekiro_unk_members1,
++            sekiro_unk_members2=sekiro_unk_members2,
+         )
+ 
+     # endregion
+@@ -672,7 +687,16 @@ class FLVER(GameFile):
+             material.pack_flver2_textures(writer, first_texture_index=first_texture_index)
+             first_texture_index += len(material.textures)
+ 
+-        # TODO: Write unknown Sekiro struct here.
++        if self.version >= FLVERVersion.Sekiro_EldenRing:
++            # `SekiroUnkStruct` header followed immediately by its member arrays (as SoulsFormats writes it).
++            header_pos = writer.position
++            writer.pack("hhIIiiiii", len(self.sekiro_unk_members1), len(self.sekiro_unk_members2), 0, 0, 0, 0, 0, 0, 0)
++            offsets = []
++            for members in (self.sekiro_unk_members1, self.sekiro_unk_members2):
++                offsets.append(writer.position)
++                for (a, b, c, d), index in members:
++                    writer.pack("hhhhii", a, b, c, d, index, 0)
++            writer.pack_at(header_pos + 4, "II", *offsets)
+ 
+         # Indexed data only after this point, aligning to 16 bytes between each data type.
+ 
