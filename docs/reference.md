@@ -28,6 +28,14 @@ inference rather than a measurement it says so.
 ## 2. PARAM format notes
 * **DS1 PARAM**: 32-bit; header 0x30; rows of 12 bytes (id, data off, name off). Paramdefs: Soulstruct bundles `paramdef.paramdefbnd` (format 104, 176-byte fields).
 * **ER PARAM**: `flags2D` at 0x2D: `0x01` IntDataOffset, **`0x04` LongDataOffset (24-byte row entries: id, pad, u64 data, u64 name)**, `0x80` OffsetParamType. Header is 0x40 when either offset flag is set. Row names are absent in vanilla (use Paramdex `Names/*.txt`).
+* **Writing ER PARAMs** (`er_param.encode_row` / `rebuild_param`): a new row is its template row's bytes with the
+  named fields patched (bitfields read-modify-write, arrays as list or `|`-string, fixstr padded); the param is
+  rebuilt as header (stringsOffset u32@0, rowCount u16@0xA, DataStart u64@0x30 updated) + 24-byte entries sorted by
+  id + tight data block + the original strings block (param type name + shared empty row name; name offsets shifted).
+  Rebuilding 192/194 vanilla params this way is byte-identical; the other two differ only in padding.
+* **Writing `regulation.bin`** (`er_regulation.write_regulation`): BND4 → `dcx.compress_zstd` (Node
+  `zlib.zstdCompressSync`, level 15 like the shipped file; header `DCX 0x11000 … DCP ZSTD 0x20 level`) → PKCS7 →
+  AES-256-CBC with a random IV prefixed. The game loads the result (same layout as the shipped file).
 * **Bitfield packing** (both games): consecutive bitfields share a storage unit until the type changes or bits overflow; **`dummy8` bit-padding shares the byte with `u8` bits** (e.g. `u8 disableParam_NT:1` + `dummy8 reserve:7`). Getting this wrong shifts every later field by 1–2 bytes (EquipParamWeapon ER row = 664 bytes).
 * Paramdex (Mar 2026) **mislabels SwordArtsParam offset 24**: it is really the u16 **art ID** (`swordArtsTypeNew` in HKS terms), not `shieldIconType`. `swordArtsType` at offset 4 is 0 for every row.
 
@@ -133,6 +141,6 @@ ER `.param` files carry **no ParamType string**; `er_param.py` maps file names t
 * Soulstruct needs Python ≥ 3.13; its optional deps (`rich`, `typer`, `zstandard`, `frozendict`) are shimmed in `vendor/shims/`. `vendor/patches/soulstruct.patch` adds the Sekiro/Elden Ring FLVER unknown struct (`SekiroUnkStruct`: after the texture headers, `hh II 20x` counts/offsets then 16-byte members) that upstream neither reads nor writes; ER FLVERs (0x2001A) need it.
 * Textures: Pillow ≥ 11 decodes DXT1/3/5, BC4/5/7 DDS; `tools/dds_tools.py` encodes BC1/BC3/BC4/BC5/BC7 with mip chains and DX10/sRGB headers through the vendored `bc7enc_rdo` (`vendor/setup.sh` builds it; Pillow encodes BC1/BC3/BC5 as a fallback). ER modders use BC7 sRGB for `_a`/`_m`, BC7 linear for `_n`; DXT1/DXT5 load too.
 * Elden Ring texture conventions (from modding guides): `_a` albedo (sRGB); `_m` metallic (grey); `_n` packed — R/G = normal XY (G inverted vs OpenGL), **B = gloss**, **A = specular**; `_em` emissive. Weapon matbins live in `material/allmaterial.matbinbnd.dcx` (`Parts\matxml\P[WP_A_XXXX]_*.matbin`), almost all `C[DetailBlend]` (albedo/normal/metallic samplers `C_DetailBlend__snp_Texture2D_{7,0,3}_*`), glow ones `C[AMSN]_Glow[Int]` (+ `_1_EmissiveMap`).
-* ER regulation ZSTD is decompressed through Node ≥ 22.15 (`zlib.zstdDecompressSync`); AES via Python `cryptography`.
+* ER regulation ZSTD is decompressed (`zlib.zstdDecompressSync`) and compressed (`zlib.zstdCompressSync`) through Node ≥ 22.15; AES via Python `cryptography`.
 * Oodle (DCX KRAK, Elden Ring's default for chr/parts/material files) is read with a Linux build of powzix's **ooz** (`vendor/setup.sh` clones it at `0503806`, applies `vendor/patches/ooz-linux.patch`, builds `vendor/ooz/oozdec`); `tools/dcx.py` drives it. The patch is a `stdafx.h` shim (MSVC intrinsics → GCC builtins; `_BitScanReverse`/`_byteswap_ulong` must stay 32-bit) plus one decoder fix: FromSoftware compresses with seek-chunk resets (block header byte `0x8C` = restart_decoder), so every 256 KB quantum is independently decodable and its own start is the LZ window base (first 8 bytes raw). Upstream ooz passes the buffer start as window for every quantum and fails on the second one. Decompression only: KRAK sources are written back as DFLT (`DCX_DFLT_10000_44_9`), which the game loads fine.
 * DCX kinds seen: `DFLT` (c0000.anibnd, DS3-era files), `KRAK` (ER matbinbnd, partsbnd, most chr binders), `ZSTD` (ER ≥ 1.12 regulation). All go through `dcx.decompress()`.

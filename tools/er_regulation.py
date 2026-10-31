@@ -1,4 +1,4 @@
-"""Decrypt + decompress Elden Ring's regulation.bin into a raw BND4 (and list its params)."""
+"""Decrypt + decompress Elden Ring's regulation.bin into a raw BND4 (and list its params); encrypt/compress it back."""
 import sys
 from pathlib import Path
 
@@ -15,6 +15,23 @@ def decrypt_regulation(data: bytes) -> bytes:
     iv, body = data[:16], data[16:]
     dec = Cipher(algorithms.AES(ER_KEY), modes.CBC(iv)).decryptor()
     return dec.update(body) + dec.finalize()
+
+
+def encrypt_regulation(dcx_bytes: bytes) -> bytes:
+    """AES-256-CBC with a random IV prefix and PKCS7 padding (what SoulsFormats writes; the game ignores the
+    bytes after the DCX payload)."""
+    import os
+    from cryptography.hazmat.primitives import padding
+    iv = os.urandom(16)
+    padder = padding.PKCS7(128).padder()
+    body = padder.update(dcx_bytes) + padder.finalize()
+    enc = Cipher(algorithms.AES(ER_KEY), modes.CBC(iv)).encryptor()
+    return iv + enc.update(body) + enc.finalize()
+
+
+def write_regulation(bnd_bytes: bytes, kind: bytes = b"ZSTD") -> bytes:
+    """Raw parambnd (BND4) -> regulation.bin bytes (DCX of the given kind, encrypted)."""
+    return encrypt_regulation(dcx.compress(bnd_bytes, kind))
 
 
 def dcx_decompress_any(buf: bytes) -> bytes:

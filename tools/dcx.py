@@ -4,6 +4,7 @@
     raw = dcx.decompress(Path("wp_a_1503.partsbnd.dcx").read_bytes())     # bytes of the inner file
     kind = dcx.kind(buf)                                                    # b"DFLT" / b"KRAK" / b"ZSTD" / None
     out = dcx.compress_dflt(raw)                                            # DCX_DFLT_10000_44_9, accepted by ER
+    out = dcx.compress_zstd(raw)                                            # DCX_ZSTD (ER 1.12+ regulation); Node zstd
 
     python tools/dcx.py IN [OUT]      # unwrap (OUT defaults to IN without .dcx); prints kind and sizes
     python tools/dcx.py --pack IN OUT # wrap as DFLT
@@ -76,6 +77,27 @@ def decompress(buf: bytes) -> bytes:
         raise NotImplementedError(f"DCX compression {k!r}")
     assert len(out) == uncomp, (len(out), uncomp)
     return out
+
+
+def compress_zstd(raw: bytes, level: int = 15) -> bytes:
+    """DCX_ZSTD (Elden Ring 1.12+ regulation.bin style: DCP level byte 15). Needs Node >= 22.15 (zlib.zstdCompressSync)."""
+    js = ("const z=require('zlib');const b=[];process.stdin.on('data',c=>b.push(c)).on('end',()=>process.stdout.write("
+          f"z.zstdCompressSync(Buffer.concat(b),{{params:{{[z.constants.ZSTD_c_compressionLevel]:{int(level)}}}}})))")
+    comp = subprocess.run(["node", "-e", js], input=raw, capture_output=True, check=True).stdout
+    out = bytearray()
+    out += b"DCX\x00" + struct.pack(">IIIII", 0x11000, 0x18, 0x24, 0x44, 0x4C)
+    out += b"DCS\x00" + struct.pack(">II", len(raw), len(comp))
+    out += b"DCP\x00" + b"ZSTD" + struct.pack(">IBBBBIIII", 0x20, int(level), 0, 0, 0, 0, 0, 0, 0x10100)
+    out += b"DCA\x00" + struct.pack(">I", 8)
+    out += comp
+    return bytes(out)
+
+
+def compress(raw: bytes, kind: bytes) -> bytes:
+    """Wrap with the given DCX kind (b"DFLT" or b"ZSTD"; KRAK is written as DFLT, which the game accepts)."""
+    if kind == b"ZSTD":
+        return compress_zstd(raw)
+    return compress_dflt(raw)
 
 
 def compress_dflt(raw: bytes, level: int = 9) -> bytes:

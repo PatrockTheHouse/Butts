@@ -1,4 +1,5 @@
-"""Read Elden Ring PARAM files (64-bit layout) using Paramdex XML paramdefs and row-name lists."""
+"""Read Elden Ring PARAM files (64-bit layout) using Paramdex XML paramdefs and row-name lists; encode rows and
+rebuild a PARAM with added/replaced rows (`encode_row`, `rebuild_param`)."""
 import re
 import struct
 import sys
@@ -113,6 +114,90 @@ def decode_row(data: bytes, fields):
         if t != "dummy8":
             out[f["name"]] = val
     return out, pos
+
+
+def encode_row(template: bytes, fields, values: dict) -> bytes:
+    """Patch field values (by paramdef name; lists for arrays, str for fixstr) into a copy of a row's bytes."""
+    data = bytearray(template)
+    pos = 0
+    bit_off, bit_type, bit_pos = -1, None, 0
+    for f in fields:
+        t = f["type"]
+        fmt, tsize = TYPE_FMT[t]
+        name = f["name"]
+        if f["bits"] == -1:
+            bit_off = -1
+            n = f["arr"]
+            if name in values and t != "dummy8":
+                v = values[name]
+                if t in ("fixstr", "fixstrW"):
+                    raw = str(v).encode("shift_jis" if t == "fixstr" else "utf-16-le")[: tsize * n]
+                    data[pos: pos + tsize * n] = raw.ljust(tsize * n, b"\0")
+                else:
+                    vals = list(v) if isinstance(v, (list, tuple)) else [v]
+                    if isinstance(v, str):
+                        vals = [x for x in v.split("|")] if n > 1 else [v]
+                    conv = float if fmt in ("f", "d") else int
+                    vals = [conv(float(x)) if conv is int else conv(x) for x in vals]
+                    struct.pack_into("<" + fmt * n, data, pos, *vals)
+            pos += tsize * n
+        else:
+            limit = BIT_LIMIT[t]
+            tg = "u8" if t == "dummy8" else t
+            if bit_off == -1 or bit_type != tg or bit_off + f["bits"] > limit:
+                bit_off, bit_type, bit_pos = 0, tg, pos
+                pos += tsize
+            if name in values and t != "dummy8":
+                word = struct.unpack_from("<" + fmt, data, bit_pos)[0]
+                mask = ((1 << f["bits"]) - 1) << bit_off
+                word = (word & ~mask) | ((int(float(values[name])) << bit_off) & mask)
+                struct.pack_into("<" + fmt, data, bit_pos, word)
+            bit_off += f["bits"]
+    return bytes(data)
+
+
+def rebuild_param(buf: bytes, new_rows: dict[int, bytes]) -> bytes:
+    """Return the 64-bit PARAM `buf` with `new_rows` ({id: row bytes}) added or replaced, rows kept sorted by id.
+
+    Layout written (as Elden Ring's files): 0x40 header | 24-byte row entries | row data | strings block (param type
+    name + the shared empty row name), with every row-name offset remapped into the moved strings block."""
+    strings_off = struct.unpack_from("<I", buf, 0)[0]
+    count = struct.unpack_from("<H", buf, 0x0A)[0]
+    flags2d = buf[0x2D]
+    if not (flags2d & 0x04):
+        raise NotImplementedError("rebuild_param: only 64-bit (LongDataOffset) PARAMs are supported")
+    row_table = 0x40 if flags2d & 0x05 else 0x30
+    entries = []
+    for i in range(count):
+        rid, _pad, doff, noff = struct.unpack_from("<iiQQ", buf, row_table + 24 * i)
+        entries.append((rid, doff, noff))
+    row_size = (entries[1][1] - entries[0][1]) if count > 1 else (strings_off - entries[0][1])
+    default_noff = entries[0][2] if entries else strings_off
+    rows = {rid: (buf[doff: doff + row_size], noff) for rid, doff, noff in entries}
+    for rid, data in new_rows.items():
+        if len(data) != row_size:
+            raise ValueError(f"row {rid}: {len(data)} bytes, param rows are {row_size}")
+        rows[rid] = (data, rows[rid][1] if rid in rows else default_noff)
+    ids = sorted(rows)
+    if len(ids) > 0xFFFF:
+        raise ValueError("too many rows")
+    strings = buf[strings_off:]
+    header = bytearray(buf[:row_table])
+    data_start = row_table + 24 * len(ids)
+    new_strings_off = data_start + row_size * len(ids)
+    struct.pack_into("<I", header, 0, new_strings_off)
+    struct.pack_into("<H", header, 0x0A, len(ids))
+    if row_table == 0x40:
+        struct.pack_into("<Q", header, 0x30, data_start)
+    else:
+        struct.pack_into("<H", header, 0x04, data_start)
+    out = bytearray(header)
+    body = bytearray()
+    for i, rid in enumerate(ids):
+        data, noff = rows[rid]
+        out += struct.pack("<iiQQ", rid, 0, data_start + row_size * i, noff - strings_off + new_strings_off if noff else 0)
+        body += data
+    return bytes(out + body + strings)
 
 
 def load_names(def_name: str) -> dict[int, str]:

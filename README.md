@@ -22,7 +22,7 @@ commits, with our fixes applied from `vendor/patches/`.
 | Tool | Purpose |
 |---|---|
 | `bnd_tools.py FILE` | List any BND3/BND4 binder, DCX-compressed or not |
-| `dcx.py IN [OUT]` / `--pack IN OUT` | Unwrap any DCX (DFLT, KRAK via vendored ooz, ZSTD via Node) or wrap as DFLT |
+| `dcx.py IN [OUT]` / `--pack IN OUT` | Unwrap any DCX (DFLT, KRAK via vendored ooz, ZSTD via Node) or wrap as DFLT; `compress_zstd` for ER 1.12+ regulation |
 | `bnd3_list.py BND` / `dump_rows.py BND Param [regex]` | DS1 GameParam: list PARAMs, dump row IDs/names |
 | `paramdecode.py BND Param ids…` / `--diff base others…` | DS1 rows decoded with the real paramdefs; diff rows field by field |
 | `tae_ptde.py` / `tae64.py [-v] TAE…` | Dump TAE animations and events (DS1 32-bit / DSR-DS3-ER 64-bit) |
@@ -31,8 +31,8 @@ commits, with our fixes applied from `vendor/patches/`.
 | `bnd4.py BINDER` | BND4 reader/writer (+ DCX; DFLT standalone, KRAK/ZSTD through dcx.py) — build or patch anibnd/regulation binders |
 | `tae_catalog.py TAE…` | One line per animation: bullets, FFX, sounds, SpEffects, flags |
 | `tae_template.py GAME [event ids]` | DSAnimStudio event definitions (field layouts, enums) for DS1/DS3/ER/… |
-| `er_regulation.py regulation.bin OUT.parambnd` | Decrypt + decompress Elden Ring's regulation into a raw BND4 |
-| `er_param.py BND Param ids…` | Decode Elden Ring PARAM rows (Paramdex defs + row names) |
+| `er_regulation.py regulation.bin OUT.parambnd` | Decrypt + decompress Elden Ring's regulation into a raw BND4; `write_regulation(bnd_bytes)` packs it back (ZSTD + AES) |
+| `er_param.py BND Param ids…` | Decode Elden Ring PARAM rows (Paramdex defs + row names); `encode_row` / `rebuild_param` add or replace rows (64-bit PARAM writer) |
 | `ds1_anim_load.py HKX…` | Load DS1 animations, including Havok Content Tools exports |
 | `convert_anim_ds1_to_er.py [--verify] OUT_DIR HKX…` | Convert DS1 (hk2010) animations to Elden Ring (hk2018) tagfiles |
 | `flver_info.py FILE [--verts] [--json OUT]` | Dump a FLVER (or every FLVER/TPF in a partsbnd/chrbnd): header, bones, dummies, materials, GX items, meshes, layouts, textures |
