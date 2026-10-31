@@ -1,3 +1,71 @@
+diff --git a/src/soulstruct/base/models/matbin.py b/src/soulstruct/base/models/matbin.py
+index 26fdb1f..935e906 100644
+--- a/src/soulstruct/base/models/matbin.py
++++ b/src/soulstruct/base/models/matbin.py
+@@ -7,7 +7,7 @@ import re
+ import typing as tp
+ from dataclasses import dataclass, field
+ from enum import IntEnum
+-from pathlib import Path
++from pathlib import Path, PureWindowsPath
+ 
+ from soulstruct.base.game_file import GameFile
+ from soulstruct.games import Game, get_game
+@@ -187,26 +187,27 @@ class MATBIN(GameFile):
+     def get_sampler_stem(self, matbin_sampler_type: str) -> str:
+         for sampler in self.samplers:
+             if sampler.sampler_type == matbin_sampler_type:
+-                return Path(sampler.path).stem  # drops '.tif' extension
++                return PureWindowsPath(sampler.path).stem  # drops '.tif' extension
+         raise KeyError(
+             f"MATBIN sampler type '{matbin_sampler_type}' not found in MATBIN from path '{self.path}'."
+         )
+ 
++    # Game paths are Windows paths ('N:\\GR\\...'); parse them as such on every platform.
+     @property
+     def shader_name(self):
+-        return Path(self.shader_path).name
++        return PureWindowsPath(self.shader_path).name
+ 
+     @property
+     def shader_stem(self):
+-        return Path(self.shader_path).stem
++        return PureWindowsPath(self.shader_path).stem
+ 
+     @property
+     def source_name(self):
+-        return Path(self.source_path).name
++        return PureWindowsPath(self.source_path).name
+ 
+     @property
+     def source_stem(self):
+-        return Path(self.source_path).stem
++        return PureWindowsPath(self.source_path).stem
+ 
+     def __repr__(self):
+         params = "\n".join(f"    {param.name} = {param.value}" for param in self.params)
+diff --git a/src/soulstruct/base/models/shaders.py b/src/soulstruct/base/models/shaders.py
+index cdae313..0596ea1 100644
+--- a/src/soulstruct/base/models/shaders.py
++++ b/src/soulstruct/base/models/shaders.py
+@@ -12,7 +12,7 @@ import re
+ import typing as tp
+ from dataclasses import dataclass, field
+ from enum import IntEnum
+-from pathlib import Path
++from pathlib import Path, PureWindowsPath
+ 
+ from soulstruct.exceptions import SoulstructError
+ from .matbin import MATBIN, MATBINBND
+@@ -49,7 +49,7 @@ class MatDefSampler:
+     @property
+     def matbin_texture_stem(self) -> str:
+         if self.matbin_texture_path:
+-            return Path(self.matbin_texture_path).stem  # remove last suffix only
++            return PureWindowsPath(self.matbin_texture_path).stem  # remove last suffix only
+         return ""  # no path
+ 
+     def __repr__(self):
 diff --git a/src/soulstruct/flver/core.py b/src/soulstruct/flver/core.py
 index 076b83b..67e28d9 100644
 --- a/src/soulstruct/flver/core.py
@@ -57,4 +125,53 @@ index 076b83b..67e28d9 100644
 +            writer.pack_at(header_pos + 4, "II", *offsets)
  
          # Indexed data only after this point, aligning to 16 bytes between each data type.
+ 
+diff --git a/src/soulstruct/flver/material.py b/src/soulstruct/flver/material.py
+index de3cd60..1321ee6 100644
+--- a/src/soulstruct/flver/material.py
++++ b/src/soulstruct/flver/material.py
+@@ -6,7 +6,7 @@ import logging
+ import re
+ import typing as tp
+ from dataclasses import dataclass, field
+-from pathlib import Path
++from pathlib import Path, PureWindowsPath
+ 
+ from soulstruct.utilities.binary import *
+ from soulstruct.utilities.text import indent_lines
+@@ -284,12 +284,12 @@ class Material:
+ 
+     @property
+     def mat_def_stem(self) -> str:
+-        return Path(self.mat_def_path).stem
++        return PureWindowsPath(self.mat_def_path).stem
+ 
+     @property
+     def mat_def_name(self) -> str:
+         """Extension can vary: '.mtd' or '.matxml'."""
+-        return Path(self.mat_def_path).name
++        return PureWindowsPath(self.mat_def_path).name
+ 
+     @mat_def_name.setter
+     def mat_def_name(self, name: str):
+@@ -301,9 +301,9 @@ class Material:
+             raise ValueError(f"Material definition name {name} should have no suffix, or '.mtd' or '.matxml'.")
+         else:
+             # Keep current suffix.
+-            new_suffix = Path(self.mat_def_path).suffix
++            new_suffix = PureWindowsPath(self.mat_def_path).suffix
+             name += new_suffix
+-        self.mat_def_path = str(Path(self.mat_def_path).with_name(name))
++        self.mat_def_path = str(PureWindowsPath(self.mat_def_path).with_name(name))
+ 
+     @property
+     def display_mask(self) -> int | None:
+@@ -346,7 +346,7 @@ class Material:
+         """Replace all occurrences of `old_string` in all texture names (at end of paths) with `new_string`."""
+         for tex in self.textures:
+             if tex.path:
+-                tex_path = Path(tex.path)
++                tex_path = PureWindowsPath(tex.path)
+                 tex_name = tex_path.name.replace(old_string, new_string)
+                 tex.path = str(tex_path.with_name(tex_name))
  

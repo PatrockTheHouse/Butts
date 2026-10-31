@@ -36,6 +36,7 @@ commits, with our fixes applied from `vendor/patches/`.
 | `ds1_anim_load.py HKX…` | Load DS1 animations, including Havok Content Tools exports |
 | `convert_anim_ds1_to_er.py [--verify] OUT_DIR HKX…` | Convert DS1 (hk2010) animations to Elden Ring (hk2018) tagfiles |
 | `flver_info.py FILE [--verts] [--json OUT]` | Dump a FLVER (or every FLVER/TPF in a partsbnd/chrbnd): header, bones, dummies, materials, GX items, meshes, layouts, textures |
+| `er_model.py` (library) | Build Elden Ring parts models: FLVER 0x2001A + TPF + partsbnd from mesh arrays, conventions learned from a vanilla reference (`ERProfile`) |
 | `dds_tools.py info\|png FILE.dds` | DDS helpers: decode to RGBA, encode DXT1/DXT5/BC5 with mip chains, legacy ↔ DX10 (sRGB) headers — no texconv needed |
 
 Run tools with `python3 -I tools/<tool>.py …` (isolated mode) when the inputs are untrusted files.
