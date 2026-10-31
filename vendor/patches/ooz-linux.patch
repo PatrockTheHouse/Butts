@@ -1,0 +1,131 @@
+diff --git a/kraken.cpp b/kraken.cpp
+index a4983d6..a43bb5e 100644
+--- a/kraken.cpp
++++ b/kraken.cpp
+@@ -4088,8 +4088,13 @@ bool Kraken_DecodeStep(struct KrakenDecoder *dec,
+     return true;
+   }
+ 
++  // Seek-chunk reset (restart_decoder): this quantum is independently decodable, so its own start is the
++  // LZ window base (first 8 bytes stored raw, no matches reaching into earlier quanta). FromSoftware's DCX
++  // KRAK files (Elden Ring) are written this way; without this the second 256 KB quantum fails to decode.
++  byte *window_start = dec->hdr.restart_decoder ? dst_start + offset : dst_start;
++
+   if (dec->hdr.decoder_type == 6) {
+-    n = Kraken_DecodeQuantum(dst_start + offset, dst_start + offset + dst_bytes_left, dst_start,
++    n = Kraken_DecodeQuantum(dst_start + offset, dst_start + offset + dst_bytes_left, window_start,
+                          src, src + qhdr.compressed_size,
+                          dec->scratch, dec->scratch + dec->scratch_size);
+   } else if (dec->hdr.decoder_type == 5) {
+@@ -4108,11 +4113,11 @@ bool Kraken_DecodeStep(struct KrakenDecoder *dec,
+     n = (int)Bitknit_Decode(src, src + qhdr.compressed_size, dst_start + offset, dst_start + offset + dst_bytes_left, dst_start, (struct BitknitState*)dec->scratch);
+ 
+   } else if (dec->hdr.decoder_type == 10) {
+-    n = Mermaid_DecodeQuantum(dst_start + offset, dst_start + offset + dst_bytes_left, dst_start,
++    n = Mermaid_DecodeQuantum(dst_start + offset, dst_start + offset + dst_bytes_left, window_start,
+                               src, src + qhdr.compressed_size,
+                               dec->scratch, dec->scratch + dec->scratch_size);
+   } else if (dec->hdr.decoder_type == 12) {
+-    n = Leviathan_DecodeQuantum(dst_start + offset, dst_start + offset + dst_bytes_left, dst_start,
++    n = Leviathan_DecodeQuantum(dst_start + offset, dst_start + offset + dst_bytes_left, window_start,
+                                 src, src + qhdr.compressed_size,
+                                 dec->scratch, dec->scratch + dec->scratch_size);
+   } else {
+diff --git a/oozdec.cpp b/oozdec.cpp
+new file mode 100644
+index 0000000..3f3a626
+--- /dev/null
++++ b/oozdec.cpp
+@@ -0,0 +1,17 @@
++// oozdec: decompress a raw Oodle (Kraken/Mermaid/Selkie/Leviathan) stream, as stored in FromSoftware DCX "KRAK"
++// payloads.   usage: oozdec IN OUT UNCOMPRESSED_SIZE
++#include "stdafx.h"
++int Kraken_Decompress(const byte *src, size_t src_len, byte *dst, size_t dst_len);
++int main(int argc, char **argv) {
++  if (argc != 4) { fprintf(stderr, "usage: oozdec IN OUT UNCOMPRESSED_SIZE\n"); return 2; }
++  FILE *f = fopen(argv[1], "rb"); if (!f) { perror(argv[1]); return 1; }
++  fseeko(f, 0, SEEK_END); size_t n = ftello(f); fseeko(f, 0, SEEK_SET);
++  byte *src = (byte *)malloc(n + 64); size_t rd = fread(src, 1, n, f); fclose(f);
++  if (rd != n) { fprintf(stderr, "short read\n"); return 1; }
++  size_t out_len = strtoull(argv[3], nullptr, 10);
++  byte *dst = (byte *)malloc(out_len + 64);
++  int got = Kraken_Decompress(src, n, dst, out_len);
++  if (got < 0 || (size_t)got != out_len) { fprintf(stderr, "decompress failed: got %d of %zu\n", got, out_len); return 1; }
++  FILE *o = fopen(argv[2], "wb"); fwrite(dst, 1, out_len, o); fclose(o);
++  return 0;
++}
+diff --git a/stdafx.h b/stdafx.h
+index a23e2bf..887d463 100644
+--- a/stdafx.h
++++ b/stdafx.h
+@@ -1,31 +1,52 @@
+-// stdafx.h : includefile for standard system include files,
+-// or project specific include files that are used frequently, but
+-// are changed infrequently
+-//
+-
++// Linux shim for ooz's MSVC-only stdafx.h (fromsoft-modkit). Builds the decompressor + original CLI (no DLL).
+ #pragma once
+-
+-#include "targetver.h"
+-
+-#define _CRT_SECURE_NO_WARNINGS 1
+-
+ #include <stdio.h>
+-#include <tchar.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include <intrin.h>
++#include <stdint.h>
+ #include <assert.h>
+-#include <Windows.h>
++#include <sys/time.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <emmintrin.h>
++#include <immintrin.h>
+ 
+-#pragma warning (disable: 4244)
+-
+-// TODO: reference additional headers your program requires here
+ typedef unsigned char byte;
+ typedef unsigned char uint8;
+ typedef unsigned int uint32;
+-typedef unsigned __int64 uint64;
+-typedef signed __int64 int64;
++typedef uint64_t uint64;
++typedef int64_t int64;
+ typedef signed int int32;
+ typedef unsigned short uint16;
+ typedef signed short int16;
+ typedef unsigned int uint;
++typedef int64_t __int64;
++typedef void *HINSTANCE;
++typedef void *HMODULE;
++typedef int64_t LARGE_INTEGER;
++#define WINAPI
++#define __forceinline inline __attribute__((always_inline))
++
++static inline unsigned char _BitScanReverse(unsigned long *index, unsigned long mask) {
++  if (mask == 0) return 0;
++  *index = 31 - __builtin_clz((unsigned int)mask);
++  return 1;
++}
++static inline unsigned char _BitScanForward(unsigned long *index, unsigned long mask) {
++  if (mask == 0) return 0;
++  *index = __builtin_ctz((unsigned int)mask);
++  return 1;
++}
++#ifndef _rotl
++static inline unsigned int _rotl(unsigned int v, int n) { n &= 31; return n ? (v << n) | (v >> (32 - n)) : v; }
++#endif
++static inline unsigned short _byteswap_ushort(unsigned short v) { return __builtin_bswap16(v); }
++static inline unsigned long _byteswap_ulong(unsigned long v) { return __builtin_bswap32((uint32_t)v); }
++static inline uint64_t _byteswap_uint64(uint64_t v) { return __builtin_bswap64(v); }
++
++static inline HINSTANCE LoadLibraryA(const char *) { return nullptr; }
++static inline void *GetProcAddress(HINSTANCE, const char *) { return nullptr; }
++static inline int QueryPerformanceCounter(LARGE_INTEGER *c) { struct timeval tv; gettimeofday(&tv, nullptr); *c = (int64)tv.tv_sec * 1000000 + tv.tv_usec; return 1; }
++static inline int QueryPerformanceFrequency(LARGE_INTEGER *f) { *f = 1000000; return 1; }
++#define _fseeki64 fseeko
++#define _ftelli64 ftello

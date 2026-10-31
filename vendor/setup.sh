@@ -19,6 +19,7 @@ PINS=(
   "https://github.com/Grimrukh/constrata         constrata           b46a942c3cf030c2e330e61e4fb61d2cba82daae"
   "https://github.com/soulsmods/Paramdex         paramdex            ff7245e524329bc3eab00036723d2bd53384cedf"
   "https://github.com/Meowmaritus/DSAnimStudio   dsanimstudio        f1bff06cd422de991b0a0fa8a2da81db43417318"
+  "https://github.com/powzix/ooz                 ooz                 05038060aa68f9187ae9923b2388ca8db40e58d1"
 )
 
 UPDATE=0
@@ -54,6 +55,27 @@ if git -C soulstruct-havok apply --check --reverse "$HERE/patches/soulstruct-hav
 else
   git -C soulstruct-havok apply "$HERE/patches/soulstruct-havok.patch"
   echo "[vendor] applied soulstruct-havok patch"
+fi
+
+# ooz (open-source Oodle Kraken/Mermaid/Leviathan decompressor, MSVC-only upstream): Linux stdafx.h shim,
+# a seek-chunk-reset fix needed for FromSoftware's DCX KRAK streams, and the small `oozdec` CLI that
+# tools/dcx.py drives (oozdec IN OUT UNCOMPRESSED_SIZE). Decompression only; we write DCX as DFLT.
+if git -C ooz apply --check --reverse "$HERE/patches/ooz-linux.patch" 2>/dev/null; then
+  echo "[vendor] ooz patch already applied"
+else
+  git -C ooz apply "$HERE/patches/ooz-linux.patch"
+  echo "[vendor] applied ooz patch"
+fi
+if [[ ! -x ooz/oozdec || $UPDATE -eq 1 || ooz/oozdec -ot "$HERE/patches/ooz-linux.patch" ]]; then
+  if command -v g++ >/dev/null; then
+    echo "[vendor] building ooz/oozdec"
+    OOZFLAGS="-O2 -std=c++17 -fpermissive -w -msse4.1"
+    (cd ooz && g++ $OOZFLAGS -Dmain=ooz_cli_main -c kraken.cpp -o kraken.o \
+      && g++ $OOZFLAGS -c lzna.cpp -o lzna.o && g++ $OOZFLAGS -c bitknit.cpp -o bitknit.o \
+      && g++ $OOZFLAGS -o oozdec oozdec.cpp kraken.o lzna.o bitknit.o && rm -f kraken.o lzna.o bitknit.o)
+  else
+    echo "[vendor] WARNING: g++ not found; DCX KRAK files cannot be read until vendor/ooz/oozdec is built"
+  fi
 fi
 
 # --- shims ---------------------------------------------------------------------------------
@@ -118,4 +140,4 @@ class frozendict(dict):
         d = dict(self); del d[k]; return frozendict(d)
 EOF
 
-echo "[vendor] done. Python needs: python>=3.13, numpy, scipy, cryptography; Node>=22.15 for ZSTD."
+echo "[vendor] done. Python needs: python>=3.13, numpy, scipy, cryptography; Node>=22.15 for ZSTD; g++ for KRAK."

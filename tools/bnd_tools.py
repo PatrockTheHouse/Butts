@@ -1,4 +1,4 @@
-"""Minimal readers for FromSoft DCX (DFLT), BND3 and BND4 binders."""
+"""Minimal readers for FromSoft DCX (any kind, via dcx.py), BND3 and BND4 binders."""
 import struct
 import sys
 import zlib
@@ -16,10 +16,10 @@ def dcx_decompress(buf: bytes) -> bytes:
     data = buf[dca_off + dca_size:]
     if kind == b"DFLT":
         out = zlib.decompress(data)
-    elif kind == b"KRAK":
-        raise NotImplementedError("Kraken DCX needs ooz")
     else:
-        raise NotImplementedError(kind)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import dcx                             # KRAK via vendor/ooz/oozdec, ZSTD via Node
+        out = dcx.decompress(buf)
     assert len(out) == uncomp, (len(out), uncomp)
     return out
 

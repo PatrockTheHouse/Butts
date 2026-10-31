@@ -26,7 +26,12 @@ def dcx_decompress(buf: bytes) -> bytes:
     dca = buf.index(b"DCA\x00", 0x28)
     dca_size = struct.unpack_from(">I", buf, dca + 4)[0]
     if kind != b"DFLT":
-        raise NotImplementedError(f"DCX compression {kind!r} not supported (only DFLT)")
+        try:                                   # KRAK / ZSTD live in the toolkit's dcx.py (needs vendor/ooz or Node)
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import dcx
+            return dcx.decompress(buf)
+        except ImportError:
+            raise NotImplementedError(f"DCX compression {kind!r} not supported here (only DFLT; see tools/dcx.py)")
     out = zlib.decompress(buf[dca + dca_size:])
     assert len(out) == uncomp, (len(out), uncomp)
     return out
