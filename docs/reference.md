@@ -75,6 +75,20 @@ Cross-category imports are normal (a235 Spread Crossbow imports `46033030` from 
 (`spAtkcategory`) define only the animations they change, the rest falls back to `wepmotionCategory`.
 `tools/tae_events.py` encodes/decodes payloads by DSAnimStudio field names; `tools/tae_dump.py` prints them.
 
+### ER player TAE numbering (from a modded c0000.anibnd: 621 TAEs)
+* Files `aNN.tae` for 0–99 (weapon motion categories, e.g. a46 crossbow) and `aNNN.tae` above; binder entry id
+  5000000 + N, internal TAE id 2000 + N. Weapon rows: `wepmotionCategory` = base TAE (a046), `spAtkcategory` =
+  override TAE consulted first (vanilla: 100–293 for every weapon variant, 831–953 for specials, Clever's modpack
+  678–761/857/859; the HKS can read it with `GetEquipWeaponSpecialCategoryNumber`).
+* **a300–a599 are not free**: the engine reads a(N + 300) as an overlay of TAE N for whole animation classes
+  (a3xx hold 90xxx clips, a4xx/a5xx hold 45xxx/47xxx/48xxx/145xxx clips — 1478 of their 1487 animations exist in
+  no base TAE). A custom TAE numbered 573 is therefore only ever consulted as "a273 + 300", never as a
+  `spAtkcategory` (symptom: the weapon silently plays its base category's moveset). Same rule as the DS3 tutorial
+  "only add TAE ids in a000–a299 or a600–a999". Ashes of War use a(600 + artID); a9xx are standalone (Repeating
+  Crossbow 935, Rakshasa 953) — custom weapon TAEs fit in 974–998 or the 7xx/8xx gaps.
+* An animation's HKX is found by id (TAE × 1000000 + anim; the record's name string is ignored — Clever's TAEs leave
+  it empty), either its own or `file_b` when `file_a & 0x100` (imports, also across categories: `46033030`).
+
 ### ER crossbow slots (TAE a46) — names from Smithbox's `Behavior-c0000-c0000.json` aliases
 | IDs | State |
 |---|---|
