@@ -86,8 +86,17 @@ Cross-category imports are normal (a235 Spread Crossbow imports `46033030` from 
   `spAtkcategory` (symptom: the weapon silently plays its base category's moveset). Same rule as the DS3 tutorial
   "only add TAE ids in a000–a299 or a600–a999". Ashes of War use a(600 + artID); a9xx are standalone (Repeating
   Crossbow 935, Rakshasa 953) — custom weapon TAEs fit in 974–998 or the 7xx/8xx gaps.
-* An animation's HKX is found by id (TAE × 1000000 + anim; the record's name string is ignored — Clever's TAEs leave
-  it empty), either its own or `file_b` when `file_a & 0x100` (imports, also across categories: `46033030`).
+* **Clip lookup is by the clip's own category.** An animation record names its clip (`a046_037030.hkt`, own-type)
+  or imports it by id (`file_b` = category × 1000000 + anim when `file_a & 0x100`); 482 vanilla own-type records
+  and 5337 imports point at *other* categories (a000 uses `a663_040010.hkt`, a235 imports `46033030`). The engine
+  loads the div of the **clip's** category (2-digit: tens digit → a4x holds a040–a049; 3-digit: hundreds digit —
+  a233/a236's clips are not in a4x) and looks the clip up there; a clip named `a977_*` is sought only in a9x, in
+  whatever other binder it sits. New clips for a crossbow-based weapon therefore go into a4x **named a046_9xxxxx**
+  (unused ids), referenced as imports. Clips placed in the main c0000.anibnd are not consulted.
+* Real vanilla player clips (compendium `TCRF` files) animate only the bones they need (`a046_037130`: 57 tracks,
+  `transformTrackToBoneIndices` partial, `maskAndQuantizationSize` 228), have one root variant and no reference
+  frame; the 150-track "Scene Data"/"Resource Data" self-contained clips in modded divs are modder-made (3ds Max
+  2019 + HCT 2018) and load fine. Soulstruct rewrites a vanilla clip with a byte-identical DATA section.
 
 ### ER crossbow slots (TAE a46) — names from Smithbox's `Behavior-c0000-c0000.json` aliases
 | IDs | State |
