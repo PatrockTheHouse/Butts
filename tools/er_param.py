@@ -58,11 +58,11 @@ def def_path_for(def_name: str, param_type: str | None = None) -> Path:
 def param_type_of(buf: bytes) -> str:
     """ParamType string stored in a 64-bit PARAM header."""
     flags2d = buf[0x2D]
-    if flags2d & 0x80:  # OffsetParamType
-        off = struct.unpack_from("<Q", buf, 0x30)[0]
+    if flags2d & 0x80:  # OffsetParamType: u32 pad @0x0C, u64 offset of the type string @0x10 (in the strings block)
+        off = struct.unpack_from("<Q", buf, 0x10)[0]
         end = buf.index(b"\0", off)
         return buf[off:end].decode("ascii", errors="replace")
-    return buf[0x40:0x60].split(b"\0")[0].decode("ascii", errors="replace")
+    return buf[0x0C:0x2C].split(b"\0")[0].decode("ascii", errors="replace")
 
 
 def load_def(def_name: str, param_type: str | None = None):
@@ -191,13 +191,73 @@ def rebuild_param(buf: bytes, new_rows: dict[int, bytes]) -> bytes:
         struct.pack_into("<Q", header, 0x30, data_start)
     else:
         struct.pack_into("<H", header, 0x04, data_start)
+    if flags2d & 0x80:  # OffsetParamType: the type-name string lives in the strings block, which moved
+        pto = struct.unpack_from("<Q", header, 0x10)[0]
+        struct.pack_into("<Q", header, 0x10, pto - strings_off + new_strings_off)
     out = bytearray(header)
     body = bytearray()
     for i, rid in enumerate(ids):
         data, noff = rows[rid]
         out += struct.pack("<iiQQ", rid, 0, data_start + row_size * i, noff - strings_off + new_strings_off if noff else 0)
         body += data
-    return bytes(out + body + strings)
+    result = bytes(out + body + strings)
+    validate_param(result, expect_type=param_type_of(buf))
+    return result
+
+
+def validate_param(buf: bytes, expect_type: str | None = None) -> dict:
+    """Strict structural check of a 64-bit PARAM (raises ValueError): header offsets consistent, param type string
+    readable (and equal to `expect_type`), row data contiguous and inside the data block, every row-name offset
+    inside the strings block; non-ascending row ids are only reported (two vanilla params have them). Returns a
+    summary dict."""
+    if len(buf) < 0x40:
+        raise ValueError("PARAM too small")
+    strings_off = struct.unpack_from("<I", buf, 0)[0]
+    count = struct.unpack_from("<H", buf, 0x0A)[0]
+    flags2d = buf[0x2D]
+    if not (flags2d & 0x04):
+        raise ValueError("not a LongDataOffset PARAM")
+    row_table = 0x40
+    data_start = struct.unpack_from("<Q", buf, 0x30)[0]
+    if data_start != row_table + 24 * count:
+        raise ValueError(f"DataStart {data_start} != end of row table {row_table + 24 * count}")
+    if not (data_start <= strings_off <= len(buf)):
+        raise ValueError(f"stringsOffset {strings_off} outside [{data_start}, {len(buf)}]")
+    ptype = param_type_of(buf)
+    if not ptype or not all(32 <= ord(c) < 127 for c in ptype):
+        raise ValueError(f"param type string unreadable: {ptype!r}")
+    if expect_type is not None and ptype != expect_type:
+        raise ValueError(f"param type {ptype!r} != expected {expect_type!r}")
+    if flags2d & 0x80:
+        pto = struct.unpack_from("<Q", buf, 0x10)[0]
+        if not (strings_off <= pto < len(buf)):
+            raise ValueError(f"paramTypeOffset {pto} not inside the strings block [{strings_off}, {len(buf)})")
+    prev_id = None
+    prev_end = data_start
+    row_size = None
+    warnings = []
+    for i in range(count):
+        rid, _pad, doff, noff = struct.unpack_from("<iiQQ", buf, row_table + 24 * i)
+        if prev_id is not None and rid <= prev_id and not warnings:
+            # vanilla quirk, not an error: PhantomParam is unsorted, RandomAppearParam repeats an id
+            warnings.append(f"row ids not strictly ascending at entry {i}: {prev_id} -> {rid}")
+        if doff != prev_end:
+            raise ValueError(f"row {rid}: data offset {doff}, expected {prev_end} (rows must be contiguous)")
+        if i + 1 < count:
+            next_doff = struct.unpack_from("<Q", buf, row_table + 24 * (i + 1) + 8)[0]
+            size = next_doff - doff
+        else:
+            size = strings_off - doff
+        if row_size is None:
+            row_size = size
+        elif size != row_size:
+            raise ValueError(f"row {rid}: size {size} != {row_size}")
+        if noff and not (strings_off <= noff < len(buf)):
+            raise ValueError(f"row {rid}: name offset {noff} outside the strings block")
+        prev_id, prev_end = rid, doff + size
+    if count and prev_end != strings_off:
+        raise ValueError(f"data block ends at {prev_end}, stringsOffset is {strings_off}")
+    return {"type": ptype, "rows": count, "row_size": row_size, "size": len(buf), "warnings": warnings}
 
 
 def load_names(def_name: str) -> dict[int, str]:

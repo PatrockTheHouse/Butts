@@ -79,10 +79,16 @@ def decompress(buf: bytes) -> bytes:
     return out
 
 
-def compress_zstd(raw: bytes, level: int = 15) -> bytes:
-    """DCX_ZSTD (Elden Ring 1.12+ regulation.bin style: DCP level byte 15). Needs Node >= 22.15 (zlib.zstdCompressSync)."""
+def compress_zstd(raw: bytes, level: int = 15, window_log: int = 16, content_size: bool = False) -> bytes:
+    """DCX_ZSTD (Elden Ring 1.12+ regulation.bin style: DCP level byte 15). Needs Node >= 22.15 (zlib.zstdCompressSync).
+
+    The shipped regulation's zstd frame has a 64 KB window (descriptor 0x30) and no content-size field (descriptor
+    0x00); the defaults reproduce that shape. Smithbox-written regulations (ZstdNet, large window + content size) load
+    too, so these are only about matching the game's own file."""
+    params = (f"[z.constants.ZSTD_c_compressionLevel]:{int(level)},[z.constants.ZSTD_c_windowLog]:{int(window_log)},"
+              f"[z.constants.ZSTD_c_contentSizeFlag]:{1 if content_size else 0}")
     js = ("const z=require('zlib');const b=[];process.stdin.on('data',c=>b.push(c)).on('end',()=>process.stdout.write("
-          f"z.zstdCompressSync(Buffer.concat(b),{{params:{{[z.constants.ZSTD_c_compressionLevel]:{int(level)}}}}})))")
+          f"z.zstdCompressSync(Buffer.concat(b),{{params:{{{params}}}}})))")
     comp = subprocess.run(["node", "-e", js], input=raw, capture_output=True, check=True).stdout
     out = bytearray()
     out += b"DCX\x00" + struct.pack(">IIIII", 0x11000, 0x18, 0x24, 0x44, 0x4C)
