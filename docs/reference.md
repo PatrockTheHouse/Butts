@@ -128,6 +128,34 @@ ER `.param` files carry **no ParamType string**; `er_param.py` maps file names t
 * Skeletons: DS1 c0000 = 61 bones, ER = 150; core chain is name-identical (Master, Pelvis, Spine, Spine1, Neck, Head, L/R Clavicle–UpperArm–Forearm–Hand, Finger0–2, L/R_Weapon/Shield). ER adds Spine2, Finger3/4, extra twist, IK-target, cloth and mantle bones; DS1 has Lower/Upper_Root and sheath (`Wepon_Case`) bones ER lacks. Retargeting = rest-pose-relative rotation copy + partial track binding (planned tool).
 * Not convertible as data: FFX (DS1) → FXR (ER) effects, and FMOD → Wwise sounds. Reuse ER assets or re-author.
 
+### ER player animation files — from a vanilla `c0000_a5x.anibnd.dcx` (1282 HKX)
+* Divs: `c0000_a?x.anibnd.dcx` (BND4 `07D7R6`, format 0x2E, entry flags 0x40, KRAK). Each holds whole TAE
+  categories, not a numeric range: a5x = a050, a051, a052, **a972, a973** (+ empty `div_data.txt`, `ver_0001.txt`
+  and `hkx\a5x_compendium\a5x.compendium`). Entry id = **1000000000 + cat·1000000 + anim** (`a050_030000.hkx` →
+  1050030000); entry path `N:\GR\data\INTERROOT_win64\chr\c0000\hkx\a5x_compendium\aNNN_XXXXXX.hkx`. The
+  binder rewrites byte-identically with `bnd4.py`; the game loads the div re-saved as DCX DFLT.
+* Two tagfile flavours coexist in one div: **TCRF** files (no TYPE section; types come from the div's
+  `.compendium`, a `TCM0` file with `TCID` + a TYPE section) and self-contained **TYPE** files. Every self-contained
+  file uses the 2018 section magics **`TNA1`/`TBDY`** (same encoding as `TNAM`/`TBOD`, which is all Soulstruct
+  writes). Root variants are always two: `"Scene Data"` (`hkxScene`, 3ds Max export) or `"Resource Data"` (empty
+  `hkMemoryResourceContainer`), then `"Animation Container"`.
+* Clips: `hkaSplineCompressedAnimation`, 30 fps (`frameDuration` 1/30), 150 transform tracks = all bones,
+  binding `originalSkeletonName "Master"`, `transformTrackToBoneIndices` 0..149, 150 annotation tracks (bone names
+  in the Scene-Data flavour, empty in the Resource-Data one), **always** an `hkaDefaultAnimatedReferenceFrame`
+  (up +Y, forward +Z, one sample per frame, zeros when the clip stays in place), `maxFramesPerBlock` 256,
+  `blockDuration` 8.5, **`maskAndQuantizationSize` = 4 × tracks = 600** (bytes of per-track mask/quantization
+  headers at the start of each block — the track data starts right after them, so a wrong value scrambles the
+  clip; Soulstruct's DS1 default 336 is wrong for ER), track header quantization byte 0x45.
+* `tools/er_hkx.py`: tagfile section walker and **TYPE-section transplant** — a Soulstruct-written clip gets the
+  TYPE section of a vanilla clip verbatim (TNA1/TBDY, `unsigned short` base type, all type-body flags, vanilla
+  THSH hashes), with ITEM/PTCH type indices remapped by structural identity (name + templates, recursive). The
+  result is indistinguishable from a vanilla "Resource Data" clip except for its data.
+* soulstruct-havok patch additions: hk2018 `hkxScene`/`hkxNode`/`hkxCamera`/… and
+  `hkMemoryResourceContainer`/`hkResource*` type modules (generated from the vanilla files), `Member.py_name`
+  for keyword members (`from`), `TypeNotDefinedError` triggering type-module generation, and
+  `BaseWrappedHKX.get_variant` finding the animation container when it is not variant 0 — so every vanilla ER
+  player clip now loads (`HKX.from_bytes`).
+
 ## 5b. Elden Ring parts models (weapons) — from vanilla `wp_a_1503` / `wp_a_1513`
 * Binder: BND4 `07D7R6` (format 0x74, hash table), entries 100 `{model}.tpf`, 200 `{model}.flver`, 400 `{model}.anibnd` and 800 `{model}_collidable.hkx` (rigged crossbows only), DCX KRAK. The `_l` binder (left hand) holds the **identical FLVER** named `{model}_L.flver` and a lower-resolution TPF whose textures are named `{stem}_l`.
 * FLVER 0x2001A: header unk `x4a=0 x4c=0 x5c=0 x5d=2 x68=4`. Bone usage flags: 8 = used by mesh (`Body`), 4 = the mesh's default bone (`Model_…` / `cXXXX_…`), 2 = dummy parent (`Dmypoly_SFX`), 1 = unused rig bones. The post-texture `SekiroUnkStruct` (read/written by our Soulstruct patch) is a bone hierarchy table: per bone `(parent, child, next sibling, prev sibling), index`, listed twice (second list = the control rig order). Mesh: dynamic, **no local bone list** (vertex bone indices are global), layout Position/Normal(FourBytesB)/Tangent(FourBytesB)/BoneIndices/BoneWeights(FourBytesC)/Color(1)/UVPair, face sets flags 0/1/2 (LODs) + 128/129/130, `unk_x06 = 8`, backface culling on, `normal_w = 0`. The mesh "bounding box" floats are not the vertex min/max (unknown transform); the header bbox is.

@@ -1,3 +1,25 @@
+diff --git a/src/soulstruct/havok/fromsoft/base/core.py b/src/soulstruct/havok/fromsoft/base/core.py
+index 60b0f95..4423bcf 100644
+--- a/src/soulstruct/havok/fromsoft/base/core.py
++++ b/src/soulstruct/havok/fromsoft/base/core.py
+@@ -26,8 +26,16 @@ class BaseWrappedHKX(HKX, abc.ABC):
+     HAVOK_MODULE: tp.ClassVar[HavokModule]
+ 
+     def get_variant(self, variant_index: int, *valid_types: type[HK_T]) -> HK_T:
+-        """Get variant at `variant_index`, check that it is one of the given `valid_types`, and return its type."""
++        """Get variant at `variant_index`, check that it is one of the given `valid_types`, and return its type.
++
++        Elden Ring's own player clips put a "Scene Data" (hkxScene) or "Resource Data" (hkMemoryResourceContainer)
++        variant first, so if the variant at `variant_index` is not of a valid type, the first variant that is wins.
++        """
+         variant = self.root.namedVariants[variant_index].variant
++        if not any(type(variant) is t for t in valid_types):
++            for named in self.root.namedVariants:
++                if any(type(named.variant) is t for t in valid_types):
++                    return named.variant
+         valid_type_names_modules = [f"{t.__name__} ({t.__module__})" for t in valid_types]
+         if not any(type(variant) is t for t in valid_types):
+             raise TypeError(
 diff --git a/src/soulstruct/havok/tagfile/structs.py b/src/soulstruct/havok/tagfile/structs.py
 index 7ec000a..877bdad 100644
 --- a/src/soulstruct/havok/tagfile/structs.py
@@ -11,6 +33,19 @@ index 7ec000a..877bdad 100644
              # noinspection PyUnresolvedReferences
              return self.hk_type.get_data_type()
          elif tag_data_type == TagDataType.Array:  # hkArray_
+diff --git a/src/soulstruct/havok/tagfile/unpacker.py b/src/soulstruct/havok/tagfile/unpacker.py
+index 17e16e2..fd5389a 100644
+--- a/src/soulstruct/havok/tagfile/unpacker.py
++++ b/src/soulstruct/havok/tagfile/unpacker.py
+@@ -98,7 +98,7 @@ class TagFileUnpacker:
+                             continue
+                         try:
+                             havok_py_type = self.havok_module.get_type(type_info.py_name)  # type: type[hk]
+-                        except AttributeError:
++                        except (AttributeError, TypeNotDefinedError):
+                             # Missing Python definition. Create a (possibly rough) Python definition to print.
+                             type_module_def, init_import = type_info.get_new_type_module_and_import(module_names)
+                             modules_to_create.append((type_info, type_module_def, init_import))
 diff --git a/src/soulstruct/havok/types/base.py b/src/soulstruct/havok/types/base.py
 index 71d2ccd..fc13eb8 100644
 --- a/src/soulstruct/havok/types/base.py
@@ -57,6 +92,22 @@ index 71d2ccd..fc13eb8 100644
      flags_type.set_hsh(hsh)
      flags_type.local_members = (
          Member(0, "storage", storage_type, MemberFlags.Protected),
+diff --git a/src/soulstruct/havok/types/hk.py b/src/soulstruct/havok/types/hk.py
+index 7b734d8..e1a0e76 100644
+--- a/src/soulstruct/havok/types/hk.py
++++ b/src/soulstruct/havok/types/hk.py
+@@ -67,8 +67,9 @@ class Member(tp.NamedTuple):
+ 
+     @property
+     def py_name(self) -> str:
+-        """Adds an underscore prefix if `name` is not a valid Python identifier."""
+-        return f"_{self.name}" if self.name[0].isdigit() else self.name
++        """Adds an underscore prefix if `name` is not a valid Python identifier (digit-led or a keyword like `from`)."""
++        import keyword
++        return f"_{self.name}" if (self.name[0].isdigit() or keyword.iskeyword(self.name)) else self.name
+ 
+ 
+ class Interface(tp.NamedTuple):
 diff --git a/src/soulstruct/havok/types/hk2010/__init__.py b/src/soulstruct/havok/types/hk2010/__init__.py
 index eb5fa15..6c24062 100644
 --- a/src/soulstruct/havok/types/hk2010/__init__.py
@@ -195,3 +246,788 @@ index 0000000..21328c0
 +    parent: hkMemoryResourceContainer
 +    resourceHandles: list[hkMemoryResourceHandle]
 +    children: list[hkMemoryResourceContainer]
+diff --git a/src/soulstruct/havok/types/hk2018/__init__.py b/src/soulstruct/havok/types/hk2018/__init__.py
+index 41719d4..543e4e2 100644
+--- a/src/soulstruct/havok/types/hk2018/__init__.py
++++ b/src/soulstruct/havok/types/hk2018/__init__.py
+@@ -40,5 +40,28 @@ from .hkRefCountedPropertiesEntry import hkRefCountedPropertiesEntry
+ from .hkRootLevelContainer import hkRootLevelContainer
+ from .hkRootLevelContainerNamedVariant import hkRootLevelContainerNamedVariant
+ 
++from .hkColorArgb import hkColorArgb
++from .hkUuid import hkUuid
++from .hkxCamera import hkxCamera
++from .hkxLight import hkxLight
++from .hkxLightLightType import hkxLightLightType
++from .hkxNode import hkxNode
++from .hkxNodeAnnotationData import hkxNodeAnnotationData
++from .hkxNodeSelectionSet import hkxNodeSelectionSet
++from .hkxScene import hkxScene
++from .hkxSkinBinding import hkxSkinBinding
++from .hkxSpline import hkxSpline
++from .hkxSplineControlPoint import hkxSplineControlPoint
++from .hkxSplineControlType import hkxSplineControlType
++from .hkxTextureFile import hkxTextureFile
++from .hkxTextureInplace import hkxTextureInplace
++
++from .hkMemoryResourceContainer import hkMemoryResourceContainer
++from .hkResourceContainer import hkResourceContainer
++from .hkResourceBase import hkResourceBase
++from .hkMemoryResourceHandle import hkMemoryResourceHandle
++from .hkResourceHandle import hkResourceHandle
++from .hkMemoryResourceHandleExternalLink import hkMemoryResourceHandleExternalLink
++
+ 
+ VERSION = "20180100"
+diff --git a/src/soulstruct/havok/types/hk2018/hkColorArgb.py b/src/soulstruct/havok/types/hk2018/hkColorArgb.py
+new file mode 100644
+index 0000000..283cc0a
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkColorArgb.py
+@@ -0,0 +1,14 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkColorArgb(hkUint32):
++    """Havok alias."""
++    __tag_format_flags = 0
++    __real_name = "hkColor::Argb"
++    local_members = ()
+diff --git a/src/soulstruct/havok/types/hk2018/hkMemoryResourceContainer.py b/src/soulstruct/havok/types/hk2018/hkMemoryResourceContainer.py
+new file mode 100644
+index 0000000..ea6eb68
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkMemoryResourceContainer.py
+@@ -0,0 +1,44 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from .hkResourceContainer import hkResourceContainer
++from .hkMemoryResourceHandle import hkMemoryResourceHandle
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkMemoryResourceContainer(hkResourceContainer):
++    alignment = 8
++    byte_size = 72
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __hsh = 135683799
++    __version = 1
++
++    local_members = (
++        Member(24, "name", hkStringPtr, MemberFlags.Protected),
++        Member(
++            32,
++            "parent",
++            Ptr(DefType("hkMemoryResourceContainer", lambda: hkMemoryResourceContainer)),
++            MemberFlags.NotSerializable | MemberFlags.Protected,
++        ),
++        Member(40, "resourceHandles", hkArray(hkRefPtr(hkMemoryResourceHandle)), MemberFlags.Protected),
++        Member(
++            56,
++            "children",
++            hkArray(hkRefPtr(DefType("hkMemoryResourceContainer", lambda: hkMemoryResourceContainer))),
++            MemberFlags.Protected,
++        ),
++    )
++    members = hkResourceContainer.members + local_members
++
++    name: hkStringPtr
++    parent: hkMemoryResourceContainer
++    resourceHandles: list[hkMemoryResourceHandle]
++    children: list[hkMemoryResourceContainer]
+diff --git a/src/soulstruct/havok/types/hk2018/hkMemoryResourceHandle.py b/src/soulstruct/havok/types/hk2018/hkMemoryResourceHandle.py
+new file mode 100644
+index 0000000..ec45e37
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkMemoryResourceHandle.py
+@@ -0,0 +1,31 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from .hkResourceHandle import hkResourceHandle
++from .hkMemoryResourceHandleExternalLink import hkMemoryResourceHandleExternalLink
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkMemoryResourceHandle(hkResourceHandle):
++    alignment = 8
++    byte_size = 56
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 3
++
++    local_members = (
++        Member(24, "variant", hkRefVariant(hkReferencedObject, hsh=340571500), MemberFlags.Protected),
++        Member(32, "name", hkStringPtr, MemberFlags.Protected),
++        Member(40, "references", hkArray(hkMemoryResourceHandleExternalLink), MemberFlags.Protected),
++    )
++    members = hkResourceHandle.members + local_members
++
++    variant: hkReferencedObject
++    name: hkStringPtr
++    references: list[hkMemoryResourceHandleExternalLink]
+diff --git a/src/soulstruct/havok/types/hk2018/hkMemoryResourceHandleExternalLink.py b/src/soulstruct/havok/types/hk2018/hkMemoryResourceHandleExternalLink.py
+new file mode 100644
+index 0000000..9badb64
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkMemoryResourceHandleExternalLink.py
+@@ -0,0 +1,26 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkMemoryResourceHandleExternalLink(hk):
++    alignment = 8
++    byte_size = 16
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 1
++    __real_name = "hkMemoryResourceHandle::ExternalLink"
++
++    local_members = (
++        Member(0, "memberName", hkStringPtr),
++        Member(8, "externalId", hkStringPtr),
++    )
++    members = local_members
++
++    memberName: hkStringPtr
++    externalId: hkStringPtr
+diff --git a/src/soulstruct/havok/types/hk2018/hkResourceBase.py b/src/soulstruct/havok/types/hk2018/hkResourceBase.py
+new file mode 100644
+index 0000000..b637d89
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkResourceBase.py
+@@ -0,0 +1,17 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkResourceBase(hkReferencedObject):
++    alignment = 8
++    byte_size = 24
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 57
++    __abstract_value = 3
++    local_members = ()
+diff --git a/src/soulstruct/havok/types/hk2018/hkResourceContainer.py b/src/soulstruct/havok/types/hk2018/hkResourceContainer.py
+new file mode 100644
+index 0000000..86d9ca3
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkResourceContainer.py
+@@ -0,0 +1,20 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from .hkResourceBase import hkResourceBase
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkResourceContainer(hkResourceBase):
++    alignment = 8
++    byte_size = 24
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 57
++    __abstract_value = 3
++    local_members = ()
+diff --git a/src/soulstruct/havok/types/hk2018/hkResourceHandle.py b/src/soulstruct/havok/types/hk2018/hkResourceHandle.py
+new file mode 100644
+index 0000000..648fca2
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkResourceHandle.py
+@@ -0,0 +1,20 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from .hkResourceBase import hkResourceBase
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkResourceHandle(hkResourceBase):
++    alignment = 8
++    byte_size = 24
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 57
++    __abstract_value = 3
++    local_members = ()
+diff --git a/src/soulstruct/havok/types/hk2018/hkUuid.py b/src/soulstruct/havok/types/hk2018/hkUuid.py
+new file mode 100644
+index 0000000..b3979c6
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkUuid.py
+@@ -0,0 +1,23 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkUuid(hk):
++    alignment = 4
++    byte_size = 16
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 1
++
++    local_members = (
++        Member(0, "data", hkGenericStruct(hkUint32, 4), MemberFlags.Protected),
++    )
++    members = local_members
++
++    data: tuple[hkUint32]
+diff --git a/src/soulstruct/havok/types/hk2018/hkxCamera.py b/src/soulstruct/havok/types/hk2018/hkxCamera.py
+new file mode 100644
+index 0000000..763a1c0
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxCamera.py
+@@ -0,0 +1,35 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxCamera(hkReferencedObject):
++    alignment = 16
++    byte_size = 96
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 1
++
++    local_members = (
++        Member(32, "from", hkVector4),
++        Member(48, "focus", hkVector4),
++        Member(64, "up", hkVector4),
++        Member(80, "fov", hkReal),
++        Member(84, "far", hkReal),
++        Member(88, "near", hkReal),
++        Member(92, "leftHanded", hkBool),
++    )
++    members = hkReferencedObject.members + local_members
++
++    _from: hkVector4
++    focus: hkVector4
++    up: hkVector4
++    fov: float
++    far: float
++    near: float
++    leftHanded: bool
+diff --git a/src/soulstruct/havok/types/hk2018/hkxLight.py b/src/soulstruct/havok/types/hk2018/hkxLight.py
+new file mode 100644
+index 0000000..54f368c
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxLight.py
+@@ -0,0 +1,49 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from .hkxLightLightType import hkxLightLightType
++from .hkColorArgb import hkColorArgb
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxLight(hkReferencedObject):
++    alignment = 16
++    byte_size = 112
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 4
++
++    local_members = (
++        Member(24, "type", hkEnum(hkxLightLightType, hkInt8)),
++        Member(32, "position", hkVector4),
++        Member(48, "direction", hkVector4),
++        Member(64, "color", hkColorArgb),
++        Member(68, "innerAngle", hkReal),
++        Member(72, "outerAngle", hkReal),
++        Member(76, "range", hkReal),
++        Member(80, "fadeStart", hkReal),
++        Member(84, "fadeEnd", hkReal),
++        Member(88, "decayRate", hkInt16),
++        Member(92, "intensity", hkReal),
++        Member(96, "shadowCaster", hkBool),
++    )
++    members = hkReferencedObject.members + local_members
++
++    type: hkxLightLightType
++    position: hkVector4
++    direction: hkVector4
++    color: int
++    innerAngle: float
++    outerAngle: float
++    range: float
++    fadeStart: float
++    fadeEnd: float
++    decayRate: int
++    intensity: float
++    shadowCaster: bool
+diff --git a/src/soulstruct/havok/types/hk2018/hkxLightLightType.py b/src/soulstruct/havok/types/hk2018/hkxLightLightType.py
+new file mode 100644
+index 0000000..f9e5804
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxLightLightType.py
+@@ -0,0 +1,17 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxLightLightType(hk):
++    alignment = 4
++    byte_size = 4
++    tag_type_flags = TagDataType.Int | TagDataType.IsSigned | TagDataType.Int32
++
++    __tag_format_flags = 9
++    __real_name = "hkxLight::LightType"
++    local_members = ()
+diff --git a/src/soulstruct/havok/types/hk2018/hkxNode.py b/src/soulstruct/havok/types/hk2018/hkxNode.py
+new file mode 100644
+index 0000000..ed308ae
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxNode.py
+@@ -0,0 +1,46 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from ._hkx.hkxAttributeHolder import hkxAttributeHolder
++from .hkUuid import hkUuid
++from .hkxNodeAnnotationData import hkxNodeAnnotationData
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxNode(hkxAttributeHolder):
++    alignment = 8
++    byte_size = 152
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 5
++
++    local_members = (
++        Member(40, "name", hkStringPtr),
++        Member(48, "uuid", hkUuid),
++        Member(64, "object", hkRefVariant(hkReferencedObject, hsh=340571500)),
++        Member(72, "keyFrames", hkArray(hkMatrix4)),
++        Member(88, "children", hkArray(hkRefPtr(DefType("hkxNode", lambda: hkxNode)))),
++        Member(104, "annotations", hkArray(hkxNodeAnnotationData)),
++        Member(120, "linearKeyFrameHints", hkArray(_float)),
++        Member(136, "userProperties", hkStringPtr),
++        Member(144, "selected", hkBool),
++        Member(145, "bone", hkBool),
++    )
++    members = hkxAttributeHolder.members + local_members
++
++    name: hkStringPtr
++    uuid: hkUuid
++    object: hkReferencedObject
++    keyFrames: list[hkMatrix4]
++    children: list[hkxNode]
++    annotations: list[hkxNodeAnnotationData]
++    linearKeyFrameHints: list[float]
++    userProperties: hkStringPtr
++    selected: bool
++    bone: bool
+diff --git a/src/soulstruct/havok/types/hk2018/hkxNodeAnnotationData.py b/src/soulstruct/havok/types/hk2018/hkxNodeAnnotationData.py
+new file mode 100644
+index 0000000..76a2804
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxNodeAnnotationData.py
+@@ -0,0 +1,25 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxNodeAnnotationData(hk):
++    alignment = 8
++    byte_size = 16
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++    __real_name = "hkxNode::AnnotationData"
++
++    local_members = (
++        Member(0, "time", hkReal),
++        Member(8, "description", hkStringPtr),
++    )
++    members = local_members
++
++    time: float
++    description: hkStringPtr
+diff --git a/src/soulstruct/havok/types/hk2018/hkxNodeSelectionSet.py b/src/soulstruct/havok/types/hk2018/hkxNodeSelectionSet.py
+new file mode 100644
+index 0000000..21fcbc4
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxNodeSelectionSet.py
+@@ -0,0 +1,29 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from ._hkx.hkxAttributeHolder import hkxAttributeHolder
++from .hkxNode import hkxNode
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxNodeSelectionSet(hkxAttributeHolder):
++    alignment = 8
++    byte_size = 64
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 0
++
++    local_members = (
++        Member(40, "selectedNodes", hkArray(hkRefPtr(hkxNode))),
++        Member(56, "name", hkStringPtr),
++    )
++    members = hkxAttributeHolder.members + local_members
++
++    selectedNodes: list[hkxNode]
++    name: hkStringPtr
+diff --git a/src/soulstruct/havok/types/hk2018/hkxScene.py b/src/soulstruct/havok/types/hk2018/hkxScene.py
+new file mode 100644
+index 0000000..e6efb92
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxScene.py
+@@ -0,0 +1,64 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from .hkxNode import hkxNode
++from .hkxNodeSelectionSet import hkxNodeSelectionSet
++from .hkxCamera import hkxCamera
++from .hkxLight import hkxLight
++from ._hkx.hkxMesh import hkxMesh
++from ._hkx.hkxMaterial import hkxMaterial
++from .hkxTextureInplace import hkxTextureInplace
++from .hkxTextureFile import hkxTextureFile
++from .hkxSkinBinding import hkxSkinBinding
++from .hkxSpline import hkxSpline
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxScene(hkReferencedObject):
++    alignment = 16
++    byte_size = 256
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __hsh = 1319454340
++    __version = 2
++
++    local_members = (
++        Member(24, "modeller", hkStringPtr),
++        Member(32, "asset", hkStringPtr),
++        Member(40, "sceneLength", hkReal),
++        Member(44, "numFrames", hkUint32),
++        Member(48, "rootNode", hkRefPtr(hkxNode)),
++        Member(56, "selectionSets", hkArray(hkRefPtr(hkxNodeSelectionSet))),
++        Member(72, "cameras", hkArray(hkRefPtr(hkxCamera))),
++        Member(88, "lights", hkArray(hkRefPtr(hkxLight))),
++        Member(104, "meshes", hkArray(hkRefPtr(hkxMesh))),
++        Member(120, "materials", hkArray(hkRefPtr(hkxMaterial))),
++        Member(136, "inplaceTextures", hkArray(hkRefPtr(hkxTextureInplace))),
++        Member(152, "externalTextures", hkArray(hkRefPtr(hkxTextureFile))),
++        Member(168, "skinBindings", hkArray(hkRefPtr(hkxSkinBinding))),
++        Member(184, "splines", hkArray(hkRefPtr(hkxSpline))),
++        Member(208, "appliedTransform", hkMatrix3),
++    )
++    members = hkReferencedObject.members + local_members
++
++    modeller: hkStringPtr
++    asset: hkStringPtr
++    sceneLength: float
++    numFrames: int
++    rootNode: hkxNode
++    selectionSets: list[hkxNodeSelectionSet]
++    cameras: list[hkxCamera]
++    lights: list[hkxLight]
++    meshes: list[hkxMesh]
++    materials: list[hkxMaterial]
++    inplaceTextures: list[hkxTextureInplace]
++    externalTextures: list[hkxTextureFile]
++    skinBindings: list[hkxSkinBinding]
++    splines: list[hkxSpline]
++    appliedTransform: hkMatrix3
+diff --git a/src/soulstruct/havok/types/hk2018/hkxSkinBinding.py b/src/soulstruct/havok/types/hk2018/hkxSkinBinding.py
+new file mode 100644
+index 0000000..6be09b4
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxSkinBinding.py
+@@ -0,0 +1,32 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from ._hkx.hkxMesh import hkxMesh
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxSkinBinding(hkReferencedObject):
++    alignment = 16
++    byte_size = 128
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 2
++
++    local_members = (
++        Member(24, "mesh", hkRefPtr(hkxMesh)),
++        Member(32, "nodeNames", hkArray(hkStringPtr)),
++        Member(48, "bindPose", hkArray(hkMatrix4)),
++        Member(64, "initSkinTransform", hkMatrix4),
++    )
++    members = hkReferencedObject.members + local_members
++
++    mesh: hkxMesh
++    nodeNames: list[hkStringPtr]
++    bindPose: list[hkMatrix4]
++    initSkinTransform: hkMatrix4
+diff --git a/src/soulstruct/havok/types/hk2018/hkxSpline.py b/src/soulstruct/havok/types/hk2018/hkxSpline.py
+new file mode 100644
+index 0000000..5fab7d7
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxSpline.py
+@@ -0,0 +1,27 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from .hkxSplineControlPoint import hkxSplineControlPoint
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxSpline(hkReferencedObject):
++    alignment = 8
++    byte_size = 48
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++
++    local_members = (
++        Member(24, "controlPoints", hkArray(hkxSplineControlPoint)),
++        Member(40, "isClosed", hkBool),
++    )
++    members = hkReferencedObject.members + local_members
++
++    controlPoints: list[hkxSplineControlPoint]
++    isClosed: bool
+diff --git a/src/soulstruct/havok/types/hk2018/hkxSplineControlPoint.py b/src/soulstruct/havok/types/hk2018/hkxSplineControlPoint.py
+new file mode 100644
+index 0000000..d7f5aad
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxSplineControlPoint.py
+@@ -0,0 +1,34 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++from .hkxSplineControlType import hkxSplineControlType
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxSplineControlPoint(hk):
++    alignment = 16
++    byte_size = 64
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 41
++    __real_name = "hkxSpline::ControlPoint"
++
++    local_members = (
++        Member(0, "position", hkVector4),
++        Member(16, "tangentIn", hkVector4),
++        Member(32, "tangentOut", hkVector4),
++        Member(48, "inType", hkEnum(hkxSplineControlType, hkUint8)),
++        Member(49, "outType", hkEnum(hkxSplineControlType, hkUint8)),
++    )
++    members = local_members
++
++    position: hkVector4
++    tangentIn: hkVector4
++    tangentOut: hkVector4
++    inType: hkxSplineControlType
++    outType: hkxSplineControlType
+diff --git a/src/soulstruct/havok/types/hk2018/hkxSplineControlType.py b/src/soulstruct/havok/types/hk2018/hkxSplineControlType.py
+new file mode 100644
+index 0000000..4a98334
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxSplineControlType.py
+@@ -0,0 +1,17 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxSplineControlType(hk):
++    alignment = 4
++    byte_size = 4
++    tag_type_flags = TagDataType.Int | TagDataType.IsSigned | TagDataType.Int32
++
++    __tag_format_flags = 9
++    __real_name = "hkxSpline::ControlType"
++    local_members = ()
+diff --git a/src/soulstruct/havok/types/hk2018/hkxTextureFile.py b/src/soulstruct/havok/types/hk2018/hkxTextureFile.py
+new file mode 100644
+index 0000000..54ed911
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxTextureFile.py
+@@ -0,0 +1,27 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxTextureFile(hkReferencedObject):
++    alignment = 8
++    byte_size = 48
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 1
++
++    local_members = (
++        Member(24, "filename", hkStringPtr),
++        Member(32, "name", hkStringPtr),
++        Member(40, "originalFilename", hkStringPtr),
++    )
++    members = hkReferencedObject.members + local_members
++
++    filename: hkStringPtr
++    name: hkStringPtr
++    originalFilename: hkStringPtr
+diff --git a/src/soulstruct/havok/types/hk2018/hkxTextureInplace.py b/src/soulstruct/havok/types/hk2018/hkxTextureInplace.py
+new file mode 100644
+index 0000000..903ed02
+--- /dev/null
++++ b/src/soulstruct/havok/types/hk2018/hkxTextureInplace.py
+@@ -0,0 +1,29 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from soulstruct.havok.enums import *
++from .core import *
++
++
++@dataclass(slots=True, eq=False, repr=False, kw_only=True)
++class hkxTextureInplace(hkReferencedObject):
++    alignment = 8
++    byte_size = 64
++    tag_type_flags = TagDataType.Class
++
++    __tag_format_flags = 45
++    __version = 1
++
++    local_members = (
++        Member(24, "fileType", hkGenericStruct(hkUint8, 4)),
++        Member(32, "data", hkArray(hkUint8, hsh=2331026425)),
++        Member(48, "name", hkStringPtr),
++        Member(56, "originalFilename", hkStringPtr),
++    )
++    members = hkReferencedObject.members + local_members
++
++    fileType: tuple[hkUint8]
++    data: list[int]
++    name: hkStringPtr
++    originalFilename: hkStringPtr
