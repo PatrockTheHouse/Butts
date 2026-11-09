@@ -91,8 +91,11 @@ Cross-category imports are normal (a235 Spread Crossbow imports `46033030` from 
   and 5337 imports point at *other* categories (a000 uses `a663_040010.hkt`, a235 imports `46033030`). The engine
   loads the div of the **clip's** category (2-digit: tens digit → a4x holds a040–a049; 3-digit: hundreds digit —
   a233/a236's clips are not in a4x) and looks the clip up there; a clip named `a977_*` is sought only in a9x, in
-  whatever other binder it sits. New clips for a crossbow-based weapon therefore go into a4x **named a046_9xxxxx**
-  (unused ids), referenced as imports. Clips placed in the main c0000.anibnd are not consulted.
+  whatever other binder it sits — and the clip must also exist as an **animation record of that category's TAE**
+  (a46.tae) or it is never loaded, whether referenced by import or by an own-type record naming the file. New clips
+  for a crossbow-based weapon therefore go into a4x **named a046_9xxxxx** (unused ids), get an event-less own-type
+  record appended to a46.tae, and are imported from the override TAE (`file_b` 46903110) like a235 → 46033030.
+  Clips placed in the main c0000.anibnd are not consulted; a compendium (`TCRF`) clip there crashes the boot.
 * Real vanilla player clips (compendium `TCRF` files) animate only the bones they need (`a046_037130`: 57 tracks,
   `transformTrackToBoneIndices` partial, `maskAndQuantizationSize` 228), have one root variant and no reference
   frame; the 150-track "Scene Data"/"Resource Data" self-contained clips in modded divs are modder-made (3ds Max
