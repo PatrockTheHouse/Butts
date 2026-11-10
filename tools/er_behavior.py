@@ -185,8 +185,24 @@ class Behavior:
         return er_hkx.pack_section(b"TAG0", sdkv + data_sec + type_sec + indx, self.flags.get(b"TAG0", 0))
 
 
-def register_categories(beh: bytes, base_cat: int, new_cats: list[int], slots=None, verbose=True) -> tuple[bytes, str]:
-    """Give every CMSG that owns an a{base_cat} clip (for `slots`, or all) a child clip per category in `new_cats`."""
+STRING_DATA_ANIMATION_NAMES = 88     # hkbBehaviorGraphStringData.animationNames (hkArray<hkStringPtr>)
+
+
+def animation_names(b: Behavior) -> tuple[int, int, list[str]]:
+    """(string-data item, array item, names) of hkbBehaviorGraphStringData.animationNames."""
+    sd = b.items_of("hkbBehaviorGraphStringData")[0]
+    arr = b.ptr(b.items[sd][1] + STRING_DATA_ANIMATION_NAMES)
+    _, aoff, cnt = b.items[arr]
+    return sd, arr, [b.cstr(b.ptr(aoff + 8 * k)) for k in range(cnt)]
+
+
+def register_categories(beh: bytes, base_cat: int, new_cats: list[int], slots=None, verbose=True,
+                        list_names: bool = False) -> tuple[bytes, str]:
+    """Give every CMSG that owns an a{base_cat} clip (for `slots`, or all) a child clip per category in `new_cats`.
+
+    `list_names=True` additionally appends the new animations' full paths to the string data's `animationNames`
+    and uses their list indices as internal ids (HkbEditor's convention for base-game clips). Off by default: the
+    DLC and Clever's categories are not listed and work, and the list's indices already collide with DLC ids."""
     b = Behavior(beh)
     clips = b.items_of("hkbClipGenerator")
     cmsgs = b.items_of("CustomManualSelectorGenerator")
@@ -196,6 +212,9 @@ def register_categories(beh: bytes, base_cat: int, new_cats: list[int], slots=No
         existing.setdefault(b.clip_anim(i), i)
         max_id = max(max_id, struct.unpack_from("<h", b.data, b.items[i][1] + CLIP_INTERNAL_ID)[0])
     next_id = max_id + 1
+    sd_item, names_arr, names = animation_names(b)
+    if list_names:
+        next_id = len(names)
     # which base clips are owned by which CMSGs
     owners: dict[int, list[int]] = {}
     for c in cmsgs:
@@ -244,10 +263,20 @@ def register_categories(beh: bytes, base_cat: int, new_cats: list[int], slots=No
             new_arr = b.add_ptr_array(arr, children + add)
             struct.pack_into("<Q", b.data, b.items[c][1] + CMSG_GENERATORS, new_arr)
             extended += 1
+    listed = ""
+    if list_names and anim_ids:
+        # full paths in the vanilla style, appended in internal-id order so that id == list index
+        template = names[-1].rsplit("\\", 2)[0]
+        new_names = [f"{template}\\{key[:4]}\\{key}.hkx" for key, _ in sorted(anim_ids.items(), key=lambda kv: kv[1])]
+        _, aoff, _ = b.items[names_arr]
+        targets = [b.ptr(aoff + 8 * k) for k in range(len(names))] + [b.add_string(n) for n in new_names]
+        new_list = b.add_ptr_array(names_arr, targets)
+        struct.pack_into("<Q", b.data, b.items[sd_item][1] + STRING_DATA_ANIMATION_NAMES, new_list)
+        listed = f"; {len(new_names)} names listed in animationNames ({len(names)} -> {len(targets)})"
     out = b.build()
     report = (f"{added} clip generators added ({len(anim_ids)} animations x categories {new_cats[0]}..{new_cats[-1]}) "
-              f"over {len(owners)} a{base_cat:03d} clips in {extended} selectors; internal ids {max_id + 1}..{next_id - 1}; "
-              f"{len(beh) / 1e6:.1f} -> {len(out) / 1e6:.1f} MB")
+              f"over {len(owners)} a{base_cat:03d} clips in {extended} selectors; internal ids "
+              f"{min(anim_ids.values()) if anim_ids else '-'}..{next_id - 1}{listed}; {len(beh) / 1e6:.1f} -> {len(out) / 1e6:.1f} MB")
     if verbose:
         print(report)
     return out, report
