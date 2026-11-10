@@ -37,6 +37,7 @@ commits, with our fixes applied from `vendor/patches/`.
 | `convert_anim_ds1_to_er.py [--verify] OUT_DIR HKX…` | Convert DS1 (hk2010) animations to Elden Ring (hk2018) tagfiles |
 | `er_hkx.py FILE…` / `--transplant OURS DONOR OUT` | Havok tagfile section walker; transplant a vanilla ER clip's TYPE section (TNA1/TBDY) into a converted clip, remapping ITEM/PTCH type indices |
 | `er_behavior.py GRAPH.hkx a046_037110…` (library) | Elden Ring behavior graph (`c0000.behbnd.dcx` → Behaviors) surgery: `register_categories` clones a base category's clip generators for new TAE categories under every selector, `validate`, `children_report` |
+| `er_icons.py 01_common.sblytbnd.dcx [01_common.tpf.dcx]` (library) | Elden Ring menu icons: describe the icon layouts/sheets; `pack_icons` + `add_sheet` add a new icon sheet (layout XML + DDS in the TPF) for new `iconId`s |
 | `flver_info.py FILE [--verts] [--json OUT]` | Dump a FLVER (or every FLVER/TPF in a partsbnd/chrbnd): header, bones, dummies, materials, GX items, meshes, layouts, textures |
 | `er_model.py` (library) | Build Elden Ring parts models: FLVER 0x2001A + TPF + partsbnd from mesh arrays, conventions learned from a vanilla reference (`ERProfile`) |
 | `dds_tools.py info\|png FILE.dds` | DDS helpers: decode to RGBA, encode BC1/BC3/BC4/BC5/BC7 with mip chains (vendored bc7enc_rdo; Pillow fallback), legacy ↔ DX10 (sRGB) headers — no texconv needed |
