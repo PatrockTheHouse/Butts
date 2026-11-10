@@ -86,20 +86,53 @@ Cross-category imports are normal (a235 Spread Crossbow imports `46033030` from 
   `spAtkcategory` (symptom: the weapon silently plays its base category's moveset). Same rule as the DS3 tutorial
   "only add TAE ids in a000–a299 or a600–a999". Ashes of War use a(600 + artID); a9xx are standalone (Repeating
   Crossbow 935, Rakshasa 953) — custom weapon TAEs fit in 974–998 or the 7xx/8xx gaps.
-* **Clip lookup is by the clip's own category.** An animation record names its clip (`a046_037030.hkt`, own-type)
-  or imports it by id (`file_b` = category × 1000000 + anim when `file_a & 0x100`); 482 vanilla own-type records
-  and 5337 imports point at *other* categories (a000 uses `a663_040010.hkt`, a235 imports `46033030`). The engine
-  loads the div of the **clip's** category (2-digit: tens digit → a4x holds a040–a049; 3-digit: hundreds digit —
-  a233/a236's clips are not in a4x) and looks the clip up there; a clip named `a977_*` is sought only in a9x, in
-  whatever other binder it sits — and the clip must also exist as an **animation record of that category's TAE**
-  (a46.tae) or it is never loaded, whether referenced by import or by an own-type record naming the file. New clips
-  for a crossbow-based weapon therefore go into a4x **named a046_9xxxxx** (unused ids), get an event-less own-type
-  record appended to a46.tae, and are imported from the override TAE (`file_b` 46903110) like a235 → 46033030.
-  Clips placed in the main c0000.anibnd are not consulted; a compendium (`TCRF`) clip there crashes the boot.
+* **The TAE does not choose the clip — the behavior graph does** (next section). An animation record names its
+  clip (`a046_037030.hkt`, own-type) or imports it by id (`file_b` = category × 1000000 + anim when
+  `file_a & 0x100`); 482 vanilla own-type records and 5337 imports point at *other* categories (a000 uses
+  `a663_040010.hkt`, a235 imports `46033030`). An override TAE whose category the graph does not know plays its
+  **events** over the base category's **clips**: fire rates and reloads change, the motion never does, and even a
+  byte copy of a vanilla clip filed under the new category will not play. (Earlier notes here blamed div placement,
+  clip naming and a46 registration for that symptom; all of it was the graph.) The arrangement that mirrors vanilla
+  a235 → 46033030 is still what the gun TAEs use: clips in the a4x div **named a046_9xxxxx** (unused ids), an
+  event-less own-type record for each in a46.tae, imported from the override TAE (`file_b` 46903110). Divs hold
+  whole categories (2-digit: tens digit → a4x holds a040–a049; a233/a236's clips are not in a4x). Clips placed in
+  the main c0000.anibnd are not consulted; a compendium (`TCRF`) clip there crashes the boot.
 * Real vanilla player clips (compendium `TCRF` files) animate only the bones they need (`a046_037130`: 57 tracks,
   `transformTrackToBoneIndices` partial, `maskAndQuantizationSize` 228), have one root variant and no reference
   frame; the 150-track "Scene Data"/"Resource Data" self-contained clips in modded divs are modder-made (3ds Max
   2019 + HCT 2018) and load fine. Soulstruct rewrites a vanilla clip with a byte-identical DATA section.
+
+### ER behavior graph (`chr/c0000.behbnd.dcx`) — the clip selection authority (`tools/er_behavior.py`)
+* BND4 of three hk2018 tagfiles: `Export\c0000.hkx` (project), `Export\Characters\c0000.hkx`, and
+  `Export\Behaviors\c0000.hkx` (17.6 MB, ids 7000300/7000400/7000500; entries are raw TAG0, not DCX-wrapped).
+  A modded (Clever's) graph: 120 978 items, 30 328 `hkbClipGenerator`, 4 059 `CustomManualSelectorGenerator`
+  (CMSG), 4 316 `hkbVariableBindingSet`. The div re-saved as DCX DFLT loads.
+* **Every animation state ends in a CMSG** with `animId` (+172, e.g. 37110) and `offsetType` (+168: 11 idle
+  category, 13 right-hand weapon category, 14 left hand, 15 anim id, 16 hand style + weapon category, 17 magic,
+  18 sword arts — HkbEditor's enum). Its `generators` (+152, hkArray of `hkbGenerator*`) are clip generators, **one
+  per weapon category that has the animation**: crossbow raise 37110 has `a046_037110`, `a044_…`, `a052_…`,
+  `a235_…`. The engine picks the child whose category matches the weapon (`spAtkcategory` first — Spread Crossbow
+  46/235, Pulley 46/233, Full Moon 46/236, Repeating 46/935 are the stock examples — then `wepmotionCategory`); a
+  category with no child falls back to the base category's clip while the TAE events still come from the override
+  TAE. The chosen name is then resolved through that category's TAE record (own name or import) to the HKX.
+* `hkbClipGenerator` (352 bytes): `variableBindingSet` +24 (hkRefPtr; the 1H attack variants bind `startTime` to a
+  variable), `name` +72, `animationName` +152 (hkStringPtr, short form `a046_037110`), `animationInternalId` +198
+  (hkInt16). Base-game clips: internal id = index of the full path
+  `..\..\..\..\Model\chr\c0000\hkx\a046\a046_037110.hkx` in `hkbBehaviorGraphStringData.animationNames` (14 893
+  entries, field +88); the **DLC categories (a083–a116) and Clever's (a678–a953) are not in that list** and use ids
+  past its end (up to 20 926, four even colliding with list indices), so the list is not consulted for new clips.
+  FromSoft's DLC clips use one string for `name` and `animationName`; base-game names carry `.hkx` / `_hkx_AutoSet_NN`.
+* **Registering a new category** = for every CMSG owning `a046_<anim>`, append a clone with `animationName`
+  `a974_<anim>`, a fresh internal id (past the max) and a deep-copied binding set, as a new `generators` array item
+  (pointer arrays are u64 item indices with PTCH entries of the element pointer type; the array field in DATA is
+  item index + two zero u32s, count lives in ITEM). `er_behavior.register_categories(graph, 46, [974..989], slots)`
+  does this: 23 crossbow slots × 16 categories → 928 clip generators in 78 selectors, TYPE section untouched,
+  `validate()` checks every patched pointer. HkbEditor's "duplicate clip category" workflow and ERClipGenerator do the
+  same (HkbEditor also appends to `animationNames`; not needed, FromSoft's own DLC export does not).
+* Tagfile facts: ITEM = (u32 type index | flags << 24 [0x10 object, 0x20 array], u32 DATA offset, u32 count);
+  PTCH = (u32 pointer type index, u32 count, u32 sorted offsets[count])* — groups per pointer type (`hkStringPtr`,
+  `T*<hkbGenerator>`, `hkRefPtr<…>`, `hkArray<…>`); strings are `char` arrays (NUL counted) shared freely; objects
+  16-aligned, strings 2-aligned; items in DATA-offset order.
 
 ### ER crossbow slots (TAE a46) — names from Smithbox's `Behavior-c0000-c0000.json` aliases
 | IDs | State |
