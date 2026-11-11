@@ -25,7 +25,7 @@ from xml.etree import ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import modkit_env  # noqa: E402,F401
 import numpy as np  # noqa: E402
-from bnd4 import BND4  # noqa: E402
+from bnd4 import BND4, BinderFile  # noqa: E402
 from soulstruct.containers.tpf import TPF, TPFTexture  # noqa: E402
 import dds_tools  # noqa: E402
 
@@ -60,16 +60,17 @@ def make_layout(image_stem: str, size: tuple[int, int], entries: list[dict], tem
     half_default = "0"
     if template and template["entries"] and template["entries"][0].get("half") is not None:
         half_default = template["entries"][0]["half"]
-    root = ET.Element(tag, attrib)
+    # written by hand in the game's own shape: no XML declaration, tab-indented, one SubTexture per line
+    def attrs(d):
+        return " ".join(f'{k}="{v}"' for k, v in d.items())
+    lines = [f"<{tag} {attrs(attrib)}>"]
     for e in entries:
         a = {"name": e["name"], "x": str(e["x"]), "y": str(e["y"]), "width": str(e["width"]), "height": str(e["height"])}
         if half_default is not None:
             a["half"] = str(e.get("half", half_default))
-        ET.SubElement(root, child_tag, a)
-    body = ET.tostring(root, encoding="unicode")
-    # readable: one SubTexture per line, like the vanilla files
-    body = body.replace("><", ">\n  <").replace("\n  </", "\n</")
-    return ('<?xml version="1.0" encoding="utf-8"?>\n' + body + "\n").encode("utf-8")
+        lines.append(f"\t<{child_tag} {attrs(a)}/>")
+    lines.append(f"</{tag}>")
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 # ---------------------------------------------------------------------------------------------------- images
@@ -145,7 +146,10 @@ def add_sheet(sblytbnd: bytes, tpf: bytes, stem: str, sheet_rgba: np.ndarray, en
     xml = make_layout(stem, (sheet_rgba.shape[1], sheet_rgba.shape[0]), entries, template)
     new_name = ref.name.rsplit("\\", 1)[0] + "\\" + stem + ".layout"
     existing = bnd.get(stem + ".layout")
-    bnd.set(existing.id if existing is not None else max(f.id for f in bnd.files) + 1, new_name, xml, flags=ref.flags)
+    if existing is not None:
+        existing.data = xml
+    else:   # appended, entry order kept (modded binders carry duplicate ids; BND4.set would re-sort them)
+        bnd.files.append(BinderFile(max(f.id for f in bnd.files) + 1, new_name, xml, ref.flags))
     new_lyt = bnd.write()
 
     t = TPF.from_bytes(tpf)
