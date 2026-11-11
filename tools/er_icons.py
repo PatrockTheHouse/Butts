@@ -150,17 +150,19 @@ def add_sheet(sblytbnd: bytes, tpf: bytes, stem: str, sheet_rgba: np.ndarray, en
 
     t = TPF.from_bytes(tpf)
     ref_tex = next((x for x in t.textures if x.stem.startswith("SB_Icon")), t.textures[0] if t.textures else None)
+    ref_info = dds_tools.header_info(ref_tex.data) if ref_tex is not None else {}
+    ref_fmt = ({b"DXT1": "DXT1", b"DXT5": "DXT5"}.get(ref_info.get("fourcc"))
+               or ("BC7" if ref_info.get("dxgi_format") in (98, 99) else None))
     if fmt is None:
-        fmt = "DXT5"
-        if ref_tex is not None:
-            info = dds_tools.header_info(ref_tex.data)
-            if info.get("fourcc") in (b"DXT1", b"DXT5", b"BC7", b"DX10"):
-                fmt = {b"DXT1": "DXT1", b"DXT5": "DXT5"}.get(info["fourcc"], "BC7" if info.get("dxgi_format") in (98, 99) else "DXT5")
+        fmt = ref_fmt or "DXT5"
     if mipmaps is None:
-        mipmaps = bool(ref_tex is not None and dds_tools.header_info(ref_tex.data).get("mipmaps", 1) > 1)
-    dds = dds_tools.encode(sheet_rgba, fmt=fmt, mipmaps=mipmaps, srgb=False, dx10=(fmt == "BC7"))
-    code = {"DXT1": 0, "DXT5": 5, "BC7": 107}[fmt]
-    new_tex = TPFTexture(stem=stem, data=dds, format=code,
+        mipmaps = ref_info.get("mipmaps", 1) > 1
+    dds = bytearray(dds_tools.encode(sheet_rgba, fmt=fmt, mipmaps=mipmaps, srgb=False, dx10=(fmt == "BC7")))
+    if ref_tex is not None:
+        struct.pack_into("<I", dds, 24, struct.unpack_from("<I", ref_tex.data, 24)[0])   # dwDepth as the game writes it (1)
+    # TPF format code: the reference sheet's when we encode the same way (Elden Ring: 102 = BC7), else the classic codes
+    code = ref_tex.format if (ref_tex is not None and fmt == ref_fmt) else {"DXT1": 0, "DXT5": 5, "BC7": 102}[fmt]
+    new_tex = TPFTexture(stem=stem, data=bytes(dds), format=code,
                          texture_flags=ref_tex.texture_flags if ref_tex is not None else 0,
                          texture_type=ref_tex.texture_type if ref_tex is not None else 0)
     t.textures = [x for x in t.textures if x.stem != stem] + [new_tex]
