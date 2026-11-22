@@ -166,9 +166,12 @@ def add_sheet(sblytbnd: bytes, tpf: bytes, stem: str, sheet_rgba: np.ndarray, en
         struct.pack_into("<I", dds, 24, struct.unpack_from("<I", ref_tex.data, 24)[0])   # dwDepth as the game writes it (1)
     # TPF format code: the reference sheet's when we encode the same way (Elden Ring: 102 = BC7), else the classic codes
     code = ref_tex.format if (ref_tex is not None and fmt == ref_fmt) else {"DXT1": 0, "DXT5": 5, "BC7": 102}[fmt]
+    # the TPF entry's mipmap count must say how many levels the DDS holds (vanilla: 1 for the mip-less sheets);
+    # soulstruct defaults it to 0, and a 0 here left the sheet unloaded - empty icons in game
     new_tex = TPFTexture(stem=stem, data=bytes(dds), format=code,
                          texture_flags=ref_tex.texture_flags if ref_tex is not None else 0,
-                         texture_type=ref_tex.texture_type if ref_tex is not None else 0)
+                         texture_type=ref_tex.texture_type if ref_tex is not None else 0,
+                         mipmap_count=max(1, dds_tools.header_info(bytes(dds)).get("mipmaps", 1)))
     t.textures = [x for x in t.textures if x.stem != stem] + [new_tex]
     return new_lyt, bytes(t)
 
@@ -190,6 +193,7 @@ def overwrite_icon(sblytbnd: bytes, tpf: bytes, icon_id: int, rgba: np.ndarray) 
     dds = bytearray(dds_tools.encode(img, fmt=fmt, mipmaps=info.get("mipmaps", 1) > 1, srgb=False, dx10=(fmt == "BC7")))
     struct.pack_into("<I", dds, 24, struct.unpack_from("<I", tex.data, 24)[0])
     tex.data = bytes(dds)
+    tex.mipmap_count = max(1, dds_tools.header_info(tex.data).get("mipmaps", 1))
     return bytes(t)
 
 
