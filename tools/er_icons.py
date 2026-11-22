@@ -173,6 +173,26 @@ def add_sheet(sblytbnd: bytes, tpf: bytes, stem: str, sheet_rgba: np.ndarray, en
     return new_lyt, bytes(t)
 
 
+def overwrite_icon(sblytbnd: bytes, tpf: bytes, icon_id: int, rgba: np.ndarray) -> bytes:
+    """Paint `rgba` over an existing icon's rectangle in its sheet (the whole sheet is re-encoded in its own format).
+    Returns the new TPF bytes."""
+    hit = find_icon(sblytbnd, icon_id)
+    if hit is None:
+        raise KeyError(f"icon {icon_id} is in no layout")
+    stem, e = hit
+    t = TPF.from_bytes(tpf)
+    tex = next(x for x in t.textures if x.stem == stem)
+    info = dds_tools.header_info(tex.data)
+    img = np.array(dds_tools.decode(tex.data))
+    icon = fit_icon(rgba, e["width"], margin=0) if rgba.shape[:2] != (e["height"], e["width"]) else rgba
+    img[e["y"]:e["y"] + e["height"], e["x"]:e["x"] + e["width"]] = icon[..., :4] if icon.shape[2] == 4 else _with_alpha(icon)
+    fmt = ({b"DXT1": "DXT1", b"DXT5": "DXT5"}.get(info.get("fourcc")) or ("BC7" if info.get("dxgi_format") in (98, 99) else "DXT5"))
+    dds = bytearray(dds_tools.encode(img, fmt=fmt, mipmaps=info.get("mipmaps", 1) > 1, srgb=False, dx10=(fmt == "BC7")))
+    struct.pack_into("<I", dds, 24, struct.unpack_from("<I", tex.data, 24)[0])
+    tex.data = bytes(dds)
+    return bytes(t)
+
+
 def describe(sblytbnd: bytes, tpf: bytes | None = None) -> str:
     lines = []
     for stem, lyt in layouts_in(sblytbnd).items():
