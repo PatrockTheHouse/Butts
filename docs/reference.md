@@ -214,6 +214,34 @@ ER `.param` files carry **no ParamType string**; `er_param.py` maps file names t
   for keyword members (`from`), `TypeNotDefinedError` triggering type-module generation, and
   `BaseWrappedHKX.get_variant` finding the animation container when it is not variant 0 — so every vanilla ER
   player clip now loads (`HKX.from_bytes`).
+* **Axes of the stored c0000 data** (measured on the vanilla hold-style clips): the character faces **−Z**
+  (walk-front root motion and the fast swing-phase foot velocity are −Z), up is +Y, and the **L_** bones sit at
+  **+X** — i.e. +X is the character's *left*, so the stored world is left-handed (the mirror image of a
+  right-handed x-right/y-up/z-back frame). Locomotion slot digits: `2000d`/`2010d`: d = 0 front, 1 back,
+  2 left (+X), 3 right (−X); tens digit = speed variant (20000/10/20/30 walks, 20100–20130 runs, 20200–20230
+  sprints); 26050/26250 are 180° turns carried **entirely by the root motion's yaw** (4th reference-frame
+  component), the bones keep facing −Z; 26020/26030 have no root yaw at all; 27000–27020 backsteps (+Z);
+  202xxx the crouch set. The hold-style idle stands bladed (RootRotY yaw ≈ 18°), the walks square up to ≈ 0°.
+* **Skeleton topology that matters for upper/lower splits**: `Master → RootPos → {Pelvis → legs, RootRotY →
+  RootRotXZ → Spine → Spine1 → Spine2 → {Neck → Head, L/R_Clavicle → UpperArm → Forearm → Hand → Weapon}}` —
+  the spine is a *sibling* of the pelvis, not its child. Vanilla a016 moving clips carry 42 tracks: that chain
+  plus L/R_Toe0, L/R_Thigh_Skirt, L/R_Axilla, Collar, Pectoral, ShoulderArmor, UpArmTwist, SpineArmor1/2;
+  fingers, forearm twists, thigh/calf twists and IK targets are not in the set.
+
+### Halo JMA animations — `tools/jma.py`
+* The Halo Animation Repository (MCC mod-tools exports) ships text JMA/JMM/JMT files (v16392): node tree by
+  first-child/next-sibling, then per frame per node translation (JMS units, 3.048 cm), quaternion `i j k w`
+  **stored inverted** (3ds Max convention; invert on read or the feet end up above the head) and scale. Halo
+  axes: x forward, y left, z up (right-handed). Halo 3 Master Chief rig: 51 nodes (pelvis, l/r_thigh, spine,
+  l/r_calf, spine1, l/r_foot, l/r_clavicle, neck, l/r_toe, l/r_upperarm, head, l/r_forearm, l/r_hand, fingers);
+  the Spartan's forearm is 0.33 m and hand bone 0.35 m to the Tarnished's 0.28 / 0.23.
+* Into FromSoft axes the map is a **reflection**, `HALO_TO_FROMSOFT_M = [[0,1,0],[0,0,1],[-1,0,0]]`
+  (x_er = y_halo, y_er = z_halo, z_er = −x_halo); rotations go through conjugation `M R Mᵀ`
+  (`jma.rot_to_fromsoft`). A proper rotation in its place keeps every pose transferable through per-bone offsets
+  but mirrors every motion delta — torso counter-rotation the wrong way, hands pulled apart.
+* Walk/move/idle clips are authored facing +x with the movement in the pelvis translation (walk_front 109 frames
+  = one stride at 0.4 m/s; move_front 20 frames); JMT turns rotate the pelvis itself, so a turn's facing must be
+  taken out before the upper body is laid over an ER turn (which keeps the turn in its root motion).
 
 ## 5b. Elden Ring parts models (weapons) — from vanilla `wp_a_1503` / `wp_a_1513`
 * Binder: BND4 `07D7R6` (format 0x74, hash table), entries 100 `{model}.tpf`, 200 `{model}.flver`, 400 `{model}.anibnd` and 800 `{model}_collidable.hkx` (rigged crossbows only), DCX KRAK. The `_l` binder (left hand) holds the **identical FLVER** named `{model}_L.flver` and a lower-resolution TPF whose textures are named `{stem}_l`.

@@ -39,7 +39,7 @@ commits, with our fixes applied from `vendor/patches/`.
 | `er_behavior.py GRAPH.hkx a046_037110…` (library) | Elden Ring behavior graph (`c0000.behbnd.dcx` → Behaviors) surgery: `register_categories` clones a base category's clip generators for new TAE categories under every selector, `validate`, `children_report` |
 | `fmg.py` (library) | FMG text tables, version 2 / 64-bit (DS3, Sekiro, Elden Ring): read, edit `entries`, write byte-identically; new ids get their own groups |
 | `er_icons.py 01_common.sblytbnd.dcx [01_common.tpf.dcx]` (library) | Elden Ring menu icons: describe the icon layouts/sheets; `pack_icons` + `add_sheet` add a new icon sheet (layout XML + DDS in the TPF) for new `iconId`s |
-| `jma.py FILE…` (library) | Halo JMA-family animations (JMA/JMM/JMT…, the MCC mod tools' text format): node tree, per-frame local transforms (quaternions un-inverted), `world(f)`, Halo→FromSoft axis rotation |
+| `jma.py FILE…` (library) | Halo JMA-family animations (JMA/JMM/JMT…, the MCC mod tools' text format): node tree, per-frame local transforms (quaternions un-inverted), `world(f)`, Halo→FromSoft axis map (a reflection: `vec_to_fromsoft`, `rot_to_fromsoft`) |
 | `flver_info.py FILE [--verts] [--json OUT]` | Dump a FLVER (or every FLVER/TPF in a partsbnd/chrbnd): header, bones, dummies, materials, GX items, meshes, layouts, textures |
 | `er_model.py` (library) | Build Elden Ring parts models: FLVER 0x2001A + TPF + partsbnd from mesh arrays, conventions learned from a vanilla reference (`ERProfile`) |
 | `dds_tools.py info\|png FILE.dds` | DDS helpers: decode to RGBA, encode BC1/BC3/BC4/BC5/BC7 with mip chains (vendored bc7enc_rdo; Pillow fallback), legacy ↔ DX10 (sRGB) headers — no texconv needed |

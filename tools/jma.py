@@ -3,6 +3,7 @@
     import jma
     a = jma.read(path)             # a.nodes, a.parents, a.frame_count, a.frame_rate, a.pos[F,N,3], a.rot[F][N] (Rot)
     w_pos, w_rot = a.world(f)      # world transforms of frame f (node order), Halo axes: x forward, y left, z up
+    jma.vec_to_fromsoft(v), jma.rot_to_fromsoft(r)   # into FromSoft's (mirror-image) world axes
 
 Layout (version 16392, the one the Halo Animation Repository exports in; 16390/16391 only differ in the header):
     version
@@ -26,10 +27,21 @@ import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 
 JMS_UNIT_M = 0.03048                       # metres per JMS unit
-# Halo world axes (x forward, y left, z up) -> FromSoft world axes (x right, y up, z backward): a proper rotation
-HALO_TO_FROMSOFT = Rot.from_matrix(np.array([[0.0, -1.0, 0.0],
-                                             [0.0, 0.0, 1.0],
-                                             [-1.0, 0.0, 0.0]]))
+# Halo world axes (x forward, y left, z up; right-handed) -> FromSoft world axes as stored in the Havok data
+# (forward -z, up +y, LEFT +x: the L_ bones of c0000 sit at +x, so the frame is the mirror image of Halo's).
+# The map is therefore a reflection (det -1), not a rotation: vectors go through the matrix, rotations through
+# conjugation (M R M^T, which is again a proper rotation, with the turning sense mirrored as it must be).
+HALO_TO_FROMSOFT_M = np.array([[0.0, 1.0, 0.0],
+                               [0.0, 0.0, 1.0],
+                               [-1.0, 0.0, 0.0]])
+
+
+def vec_to_fromsoft(v) -> np.ndarray:
+    return HALO_TO_FROMSOFT_M @ np.asarray(v, float)
+
+
+def rot_to_fromsoft(r: Rot) -> Rot:
+    return Rot.from_matrix(HALO_TO_FROMSOFT_M @ r.as_matrix() @ HALO_TO_FROMSOFT_M.T)
 
 
 @dataclass
