@@ -30,6 +30,11 @@ vanilla never shares - and appended to the CMSG's `generators` (a new array item
 orphaned: harmless, the loader only follows pointers). Pure tagfile surgery: DATA grows at the end, ITEM/PTCH are
 extended, the TYPE section is untouched.
 
+`wrap_categories` adds a runtime switch to every selector that owns a category's clips: the CMSG is replaced, at
+every reference, by an hkbManualSelectorGenerator [CMSG, copy of the CMSG with the category's clips swapped for an
+alternate category's] whose index is bound to a behavior variable (`add_variable` extends the four variable tables),
+so HKS `SetVariable(name, 0/1)` switches clip sets in place with a synced 0.33 s blend (the guns' low-ready hold).
+
 Tagfile facts used: ITEM entry = (u32 type index | flags << 24 [0x10 object, 0x20 array], u32 DATA offset, u32 count);
 pointers and hkArray data pointers in DATA are u64 item indices (an hkArray field is 16 bytes: item index, 0, 0 -
 size/capacity come from ITEM); PTCH = (u32 pointer type index, u32 count, u32 sorted DATA offsets[count])* lists
@@ -175,8 +180,9 @@ class Behavior:
     def build(self) -> bytes:
         self._align(16)
         item = b"".join(struct.pack("<III", *e) for e in self.items)
-        ptch = b"".join(struct.pack("<II", ti, len(offs)) + struct.pack(f"<{len(offs)}I", *sorted(set(offs)))
-                        for ti, offs in self.ptch.items())
+        groups = {ti: sorted(set(offs)) for ti, offs in self.ptch.items()}      # a re-patched location is listed once
+        ptch = b"".join(struct.pack("<II", ti, len(offs)) + struct.pack(f"<{len(offs)}I", *offs)
+                        for ti, offs in groups.items())
         indx = er_hkx.pack_section(b"INDX", er_hkx.pack_section(b"ITEM", item, self.flags.get(b"ITEM", 1))
                                    + er_hkx.pack_section(b"PTCH", ptch, self.flags.get(b"PTCH", 1)), self.flags.get(b"INDX", 0))
         sdkv = er_hkx._section_raw(self.buf, b"SDKV")
@@ -277,6 +283,158 @@ def register_categories(beh: bytes, base_cat: int, new_cats: list[int], slots=No
     report = (f"{added} clip generators added ({len(anim_ids)} animations x categories {new_cats[0]}..{new_cats[-1]}) "
               f"over {len(owners)} a{base_cat:03d} clips in {extended} selectors; internal ids "
               f"{min(anim_ids.values()) if anim_ids else '-'}..{next_id - 1}{listed}; {len(beh) / 1e6:.1f} -> {len(out) / 1e6:.1f} MB")
+    if verbose:
+        print(report)
+    return out, report
+
+
+# hkbBehaviorGraphData (120 bytes): variableInfos +40 (hkbVariableInfo x N, 6 bytes: role(2) flags(2) type(1) pad),
+# eventInfos +72, variableBounds +88 (8 bytes: min, max), variableInitialValues +104 (hkbVariableValueSet),
+# stringData +112. hkbVariableValueSet: wordVariableValues +24 (4 bytes each). hkbBehaviorGraphStringData:
+# eventNames +24, variableNames +56, animationNames +88. hkbVariableBindingSet: bindings +24 (array of 40-byte
+# hkbVariableBindingSet::Binding: memberPath +0, memberClass +8, offsetInObjectPlusOne +16, offsetInArrayPlusOne
+# +20, rootVariableIndex +24, variableIndex +28, bitIndex +32, bindingType +33). hkbManualSelectorGenerator (264):
+# variableBindingSet +24, name +72, generators +152, selectedGeneratorIndex (int16) +168, currentGeneratorIndex
+# +170, indexSelector +176, selectedIndexCanChangeAfterActivate +184, generatorChangedTransitionEffect +192.
+GRAPH_DATA_VARIABLE_INFOS, GRAPH_DATA_VARIABLE_BOUNDS, GRAPH_DATA_INITIAL_VALUES, GRAPH_DATA_STRING_DATA = 40, 88, 104, 112
+VALUE_SET_WORD_VALUES = 24
+STRING_DATA_VARIABLE_NAMES = 56
+BINDING_SET_BINDINGS, BINDING_SIZE, BINDING_ROOT_VARIABLE, BINDING_VARIABLE = 24, 40, 24, 28
+SEL_GENERATORS, SEL_SELECTED, SEL_CURRENT, SEL_CAN_CHANGE, SEL_TRANSITION = 152, 168, 170, 184, 192
+VARIABLE_TYPE = {"bool": 0, "int8": 1, "int16": 2, "int32": 3, "real": 4}
+
+
+def variable_names(b: Behavior) -> list[str]:
+    sd = b.items_of("hkbBehaviorGraphStringData")[0]
+    arr = b.ptr(b.items[sd][1] + STRING_DATA_VARIABLE_NAMES)
+    _, aoff, cnt = b.items[arr]
+    return [b.cstr(b.ptr(aoff + 8 * k)) for k in range(cnt)]
+
+
+def add_variable(b: Behavior, name: str, vtype: str = "int16", lo: int = 0, hi: int = 1, init: int = 0) -> int:
+    """Append a behavior variable (readable/settable from HKS by name) to the graph's four variable tables; returns
+    its index. Existing names are reused."""
+    names = variable_names(b)
+    if name in names:
+        return names.index(name)
+    gd = b.items_of("hkbBehaviorGraphData")[0]
+    goff = b.items[gd][1]
+    sd = b.items_of("hkbBehaviorGraphStringData")[0]
+    vs = b.items_of("hkbVariableValueSet")[0]
+
+    def extend(owner_off: int, field: int, extra: bytes, elem: int) -> None:
+        arr = b.ptr(owner_off + field)
+        ref, aoff, cnt = b.items[arr]
+        raw = bytes(b.data[aoff:aoff + cnt * elem]) + extra
+        new = b.add_raw(raw, ref, cnt + 1, 16)
+        b._patch(owner_off + field, b._ptr_type[owner_off + field], new)
+
+    extend(goff, GRAPH_DATA_VARIABLE_INFOS, struct.pack("<HHBx", 0, 0, VARIABLE_TYPE[vtype]), 6)
+    extend(goff, GRAPH_DATA_VARIABLE_BOUNDS, struct.pack("<ii", lo, hi), 8)
+    extend(b.items[vs][1], VALUE_SET_WORD_VALUES, struct.pack("<i", init), 4)
+    arr = b.ptr(b.items[sd][1] + STRING_DATA_VARIABLE_NAMES)
+    _, aoff, cnt = b.items[arr]
+    targets = [b.ptr(aoff + 8 * k) for k in range(cnt)] + [b.add_string(name)]
+    new_names = b.add_ptr_array(arr, targets)
+    b._patch(b.items[sd][1] + STRING_DATA_VARIABLE_NAMES, b._ptr_type[b.items[sd][1] + STRING_DATA_VARIABLE_NAMES], new_names)
+    return len(names)
+
+
+def node_name(b: Behavior, i: int) -> str:
+    off = b.items[i][1]
+    if (off + CLIP_NAME) in b._ptr_type:
+        p = b.ptr(off + CLIP_NAME)
+        if p and b.item_type(p) == "char":
+            return b.cstr(p)
+    return ""
+
+
+def wrap_categories(beh: bytes, pairs: dict[int, int], variable: str, template_selector: str = "StanceMove_Selector",
+                    verbose: bool = True) -> tuple[bytes, str]:
+    """Give every CMSG that owns clips of the categories in `pairs` (ready category -> alternate category) a
+    runtime switch: the CMSG is replaced, wherever it is referenced, by an hkbManualSelectorGenerator whose child 0
+    is the CMSG itself and child 1 a copy of it in which each ready-category clip is a clone named for the alternate
+    category (a{alt}_{anim}, fresh internal id; every other child shared). `selectedGeneratorIndex` is bound to the
+    behavior variable `variable` (added as int16 0..1 when missing), so HKS `SetVariable(variable, 1)` swaps the
+    clip set with the template selector's own transition (StanceMove_Selector: 0.33 s synced blend) while the
+    animation state stays what it is. Used for the guns' low-ready hold."""
+    b = Behavior(beh)
+    var = add_variable(b, variable, "int16", 0, 1, 0)
+    tmpl = next((i for i in b.items_of("hkbManualSelectorGenerator") if node_name(b, i) == template_selector), None)
+    if tmpl is None:
+        raise ValueError(f"template selector {template_selector!r} not found")
+    tmpl_off = b.items[tmpl][1]
+    tmpl_bs = b.ptr(tmpl_off + CLIP_BINDINGS)
+    tmpl_gens = b.ptr(tmpl_off + SEL_GENERATORS)
+    if not tmpl_bs or not tmpl_gens:
+        raise ValueError("template selector has no binding set / generators")
+    # the alternate clips: one clone per (ready clip, alternate category), fresh internal ids past the maximum
+    clips = b.items_of("hkbClipGenerator")
+    max_id = max(struct.unpack_from("<h", b.data, b.items[i][1] + CLIP_INTERNAL_ID)[0] for i in clips)
+    next_id = max_id + 1
+    existing = {b.clip_anim(i): i for i in clips}
+    alt_of: dict[int, int] = {}
+    anim_ids: dict[str, int] = {}
+
+    def alternate(k: int) -> int | None:
+        m = ANIM_RE.match(b.clip_anim(k))
+        if not m or int(m.group(1)) not in pairs:
+            return None
+        if k in alt_of:
+            return alt_of[k]
+        key = f"a{pairs[int(m.group(1))]:03d}_{int(m.group(2)):06d}"
+        if key in existing:
+            alt_of[k] = existing[key]
+            return existing[key]
+        nonlocal next_id
+        name = b.add_string(key)
+        clone = b.deep_copy(k, overrides={CLIP_NAME: name, CLIP_ANIM: name})
+        if key not in anim_ids:
+            anim_ids[key] = next_id
+            next_id += 1
+        struct.pack_into("<h", b.data, b.items[clone][1] + CLIP_INTERNAL_ID, anim_ids[key])
+        alt_of[k] = clone
+        existing[key] = clone
+        return clone
+
+    # reverse pointer index (DATA offset -> target) for the CMSGs we will wrap
+    cmsgs = []
+    for c in b.items_of("CustomManualSelectorGenerator"):
+        _, ch = b.cmsg_children(c)
+        if any(b.item_type(k) == "hkbClipGenerator" and (m := ANIM_RE.match(b.clip_anim(k))) and int(m.group(1)) in pairs for k in ch):
+            cmsgs.append(c)
+    targets = set(cmsgs)
+    refs: dict[int, list[int]] = {}
+    for offs in b.ptch.values():
+        for o in offs:
+            t = b.ptr(o)
+            if t in targets:
+                refs.setdefault(t, []).append(o)
+    wrapped = cloned = 0
+    for c in cmsgs:
+        arr, ch = b.cmsg_children(c)
+        new_ch = [alternate(k) or k for k in ch]
+        cloned += sum(1 for a, k in zip(new_ch, ch) if a != k)
+        c_alt = b.deep_copy(c, overrides={CMSG_GENERATORS: b.add_ptr_array(arr, new_ch)})
+        # the selector: a copy of the template with its own binding set (variable index patched), name and children
+        bs = b.deep_copy(tmpl_bs)
+        barr = b.ptr(b.items[bs][1] + BINDING_SET_BINDINGS)
+        _, boff, bcnt = b.items[barr]
+        for k in range(bcnt):
+            struct.pack_into("<ii", b.data, boff + k * BINDING_SIZE + BINDING_ROOT_VARIABLE, var, var)
+        sel = b.deep_copy(tmpl, overrides={CLIP_BINDINGS: bs, CLIP_NAME: b.add_string(f"{node_name(b, c)} {variable} Selector"),
+                                           SEL_GENERATORS: b.add_ptr_array(tmpl_gens, [c, c_alt])},
+                          share=("char", "hkbBlendingTransitionEffect"))
+        soff = b.items[sel][1]
+        struct.pack_into("<hh", b.data, soff + SEL_SELECTED, 0, 0)
+        b.data[soff + SEL_CAN_CHANGE] = 1
+        for o in refs.get(c, []):
+            struct.pack_into("<Q", b.data, o, sel)
+        wrapped += 1
+    out = b.build()
+    report = (f"{wrapped} selectors wrapped for variable {variable!r} (#{var}); {len(alt_of)} alternate clip generators "
+              f"for {len(anim_ids)} animations (internal ids {min(anim_ids.values()) if anim_ids else '-'}..{next_id - 1}) "
+              f"in {cloned} places; {len(beh) / 1e6:.1f} -> {len(out) / 1e6:.1f} MB")
     if verbose:
         print(report)
     return out, report

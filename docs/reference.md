@@ -134,6 +134,25 @@ Cross-category imports are normal (a235 Spread Crossbow imports `46033030` from 
   `T*<hkbGenerator>`, `hkRefPtr<…>`, `hkArray<…>`); strings are `char` arrays (NUL counted) shared freely; objects
   16-aligned, strings 2-aligned; items in DATA-offset order.
 
+#### Runtime clip switching from HKS (`er_behavior.add_variable` / `wrap_categories`)
+* HKS reads and writes graph variables by name (`hkbGetVariable` / `SetVariable("IndexGuardStyle", n)`), and the
+  graph binds variables to node members through `hkbVariableBindingSet` (40-byte `Binding`: memberPath string,
+  memberClass, offsets, rootVariableIndex +24, variableIndex +28, bitIndex, bindingType). 70 vanilla
+  `hkbManualSelectorGenerator`s have `selectedGeneratorIndex` bound to `IndexGuardStyle`, two to `StanceMoveType`
+  (`StanceMove_Selector`: `selectedIndexCanChangeAfterActivate` TRUE, `generatorChangedTransitionEffect` =
+  `Duration10_Sync`, a 0.33 s synced blend) — the template for a runtime switch.
+* Variables live in four parallel tables: `hkbBehaviorGraphData.variableInfos` (6 bytes: role, flags, type —
+  0 bool, 1 int8, 2 int16, 3 int32, 4 real), `.variableBounds` (min, max), `hkbVariableValueSet.wordVariableValues`
+  (initial value) and `hkbBehaviorGraphStringData.variableNames`; `add_variable` appends to all four (395 → 396).
+  `IndexBaseCategory` (HKS: `env(GetStayAnimCategory)` → 0/1/2, "heavy weapon" idle family) is set by HKS but bound
+  nowhere in the graph.
+* Category-keyed CMSGs only ever have `hkbClipGenerator` children (the engine identifies the child's category from
+  the clip's name); the seven vanilla CMSGs with selector/blender/script children all have animId 0 / offsetType 0.
+  So a switch goes *above* the CMSG: `wrap_categories` replaces the CMSG at every reference (StateInfo.generator
+  +96, selector/blender generator arrays, `hkbBlenderGeneratorChild.generator` +64, `hkbLayer.generator` +64,
+  `hkbGeneratorTransitionEffect` +184) with a selector [CMSG, copy with the category's clips swapped]. 428 CMSGs
+  own the a016 hold-style clips; 12 of them are referenced twice.
+
 ### ER crossbow slots (TAE a46) — names from Smithbox's `Behavior-c0000-c0000.json` aliases
 | IDs | State |
 |---|---|
