@@ -302,6 +302,12 @@ VALUE_SET_WORD_VALUES = 24
 STRING_DATA_VARIABLE_NAMES = 56
 BINDING_SET_BINDINGS, BINDING_SIZE, BINDING_ROOT_VARIABLE, BINDING_VARIABLE = 24, 40, 24, 28
 SEL_GENERATORS, SEL_SELECTED, SEL_CURRENT, SEL_CAN_CHANGE, SEL_TRANSITION = 152, 168, 170, 184, 192
+# hkbBlenderGenerator (240): variableBindingSet +24, name +72, referencePoseWeightThreshold +152, blendParameter +156,
+# min/maxCyclicBlendParameter +160/+164, indexOfSyncMasterChild +168, flags +170 (0x1 sync, 0x10 parametric),
+# children +176 (array of hkbBlenderGeneratorChild*). hkbBlenderGeneratorChild (96): variableBindingSet +24,
+# generator +64, boneWeights +72, weight +80 (the parametric position), worldFromModelWeight +84.
+BLENDER_BLEND_PARAM, BLENDER_CHILDREN = 156, 176
+CHILD_GENERATOR, CHILD_WEIGHT = 64, 80
 VARIABLE_TYPE = {"bool": 0, "int8": 1, "int16": 2, "int32": 3, "real": 4}
 
 
@@ -312,7 +318,7 @@ def variable_names(b: Behavior) -> list[str]:
     return [b.cstr(b.ptr(aoff + 8 * k)) for k in range(cnt)]
 
 
-def add_variable(b: Behavior, name: str, vtype: str = "int16", lo: int = 0, hi: int = 1, init: int = 0) -> int:
+def add_variable(b: Behavior, name: str, vtype: str = "int16", lo=0, hi=1, init=0) -> int:
     """Append a behavior variable (readable/settable from HKS by name) to the graph's four variable tables; returns
     its index. Existing names are reused."""
     names = variable_names(b)
@@ -330,9 +336,10 @@ def add_variable(b: Behavior, name: str, vtype: str = "int16", lo: int = 0, hi: 
         new = b.add_raw(raw, ref, cnt + 1, 16)
         b._patch(owner_off + field, b._ptr_type[owner_off + field], new)
 
+    word = "f" if vtype == "real" else "i"            # hkbVariableValue is a 4-byte union: int or float
     extend(goff, GRAPH_DATA_VARIABLE_INFOS, struct.pack("<HHBx", 0, 0, VARIABLE_TYPE[vtype]), 6)
-    extend(goff, GRAPH_DATA_VARIABLE_BOUNDS, struct.pack("<ii", lo, hi), 8)
-    extend(b.items[vs][1], VALUE_SET_WORD_VALUES, struct.pack("<i", init), 4)
+    extend(goff, GRAPH_DATA_VARIABLE_BOUNDS, struct.pack("<" + word * 2, lo, hi), 8)
+    extend(b.items[vs][1], VALUE_SET_WORD_VALUES, struct.pack("<" + word, init), 4)
     arr = b.ptr(b.items[sd][1] + STRING_DATA_VARIABLE_NAMES)
     _, aoff, cnt = b.items[arr]
     targets = [b.ptr(aoff + 8 * k) for k in range(cnt)] + [b.add_string(name)]
@@ -351,7 +358,7 @@ def node_name(b: Behavior, i: int) -> str:
 
 
 def wrap_alternates(beh: bytes, alternates: dict[str, str], variable: str, template_selector: str = "StanceMove_Selector",
-                    verbose: bool = True) -> tuple[bytes, str]:
+                    verbose: bool = True, kind: str = "select", template_blender: str = "Move Blend") -> tuple[bytes, str]:
     """Give every CMSG that owns a clip named in `alternates` (animation name -> alternate animation name, e.g.
     "a018_020000" -> "a018_920000") a runtime switch: the CMSG is replaced, wherever it is referenced, by an
     hkbManualSelectorGenerator whose child 0 is the CMSG itself and child 1 a copy of it in which each named clip is
@@ -359,17 +366,36 @@ def wrap_alternates(beh: bytes, alternates: dict[str, str], variable: str, templ
     to the behavior variable `variable` (added as int16 0..1 when missing), so HKS `SetVariable(variable, 1)` swaps
     the clips in place with the template selector's own transition (StanceMove_Selector: 0.33 s synced blend) while
     the animation state stays what it is. Used for the guns' low-ready hold. The alternate names must be animations
-    of the same category as the originals (the engine reads a CMSG child's category from the clip name)."""
+    of the same category as the originals (the engine reads a CMSG child's category from the clip name).
+
+    kind="select": the switch is an hkbManualSelectorGenerator bound to an int16 variable. In Elden Ring that index
+    is only read when the selector activates (the hold changed at the next state entry, not while standing), so
+    kind="blend" is the one that works live: a parametric hkbBlenderGenerator copied from `template_blender`
+    ("Move Blend", the stance-movement blend the HKS drives through "MoveType"), children at parametric positions
+    0 (original) and 1 (alternate), `blendParameter` bound to a real 0..1 variable that the HKS ramps each frame."""
     b = Behavior(beh)
-    var = add_variable(b, variable, "int16", 0, 1, 0)
-    tmpl = next((i for i in b.items_of("hkbManualSelectorGenerator") if node_name(b, i) == template_selector), None)
-    if tmpl is None:
-        raise ValueError(f"template selector {template_selector!r} not found")
-    tmpl_off = b.items[tmpl][1]
-    tmpl_bs = b.ptr(tmpl_off + CLIP_BINDINGS)
-    tmpl_gens = b.ptr(tmpl_off + SEL_GENERATORS)
-    if not tmpl_bs or not tmpl_gens:
-        raise ValueError("template selector has no binding set / generators")
+    if kind == "blend":
+        var = add_variable(b, variable, "real", 0.0, 1.0, 0.0)
+        tmpl = next((i for i in b.items_of("hkbBlenderGenerator") if node_name(b, i) == template_blender), None)
+        if tmpl is None:
+            raise ValueError(f"template blender {template_blender!r} not found")
+        tmpl_off = b.items[tmpl][1]
+        tmpl_bs = b.ptr(tmpl_off + CLIP_BINDINGS)
+        tmpl_gens = b.ptr(tmpl_off + BLENDER_CHILDREN)
+        _, go, gc = b.items[tmpl_gens]
+        tmpl_children = [b.ptr(go + 8 * k) for k in range(gc)]
+        if not tmpl_bs or gc < 2:
+            raise ValueError("template blender has no binding set / fewer than two children")
+    else:
+        var = add_variable(b, variable, "int16", 0, 1, 0)
+        tmpl = next((i for i in b.items_of("hkbManualSelectorGenerator") if node_name(b, i) == template_selector), None)
+        if tmpl is None:
+            raise ValueError(f"template selector {template_selector!r} not found")
+        tmpl_off = b.items[tmpl][1]
+        tmpl_bs = b.ptr(tmpl_off + CLIP_BINDINGS)
+        tmpl_gens = b.ptr(tmpl_off + SEL_GENERATORS)
+        if not tmpl_bs or not tmpl_gens:
+            raise ValueError("template selector has no binding set / generators")
     clips = b.items_of("hkbClipGenerator")
     max_id = max(struct.unpack_from("<h", b.data, b.items[i][1] + CLIP_INTERNAL_ID)[0] for i in clips)
     next_id = max_id + 1
@@ -420,17 +446,27 @@ def wrap_alternates(beh: bytes, alternates: dict[str, str], variable: str, templ
         _, boff, bcnt = b.items[barr]
         for k in range(bcnt):
             struct.pack_into("<ii", b.data, boff + k * BINDING_SIZE + BINDING_ROOT_VARIABLE, var, var)
-        sel = b.deep_copy(tmpl, overrides={CLIP_BINDINGS: bs, CLIP_NAME: b.add_string(f"{node_name(b, c)} {variable} Selector"),
-                                           SEL_GENERATORS: b.add_ptr_array(tmpl_gens, [c, c_alt])},
-                          share=("char", "hkbBlendingTransitionEffect"))
-        soff = b.items[sel][1]
-        struct.pack_into("<hh", b.data, soff + SEL_SELECTED, 0, 0)
-        b.data[soff + SEL_CAN_CHANGE] = 1
+        if kind == "blend":
+            kids = []
+            for k, gen in enumerate((c, c_alt)):
+                kid = b.deep_copy(tmpl_children[k], overrides={CHILD_GENERATOR: gen}, share=("char",))
+                struct.pack_into("<f", b.data, b.items[kid][1] + CHILD_WEIGHT, float(k))
+                kids.append(kid)
+            sel = b.deep_copy(tmpl, overrides={CLIP_BINDINGS: bs, CLIP_NAME: b.add_string(f"{node_name(b, c)} {variable} Blend"),
+                                               BLENDER_CHILDREN: b.add_ptr_array(tmpl_gens, kids)}, share=("char",))
+            struct.pack_into("<f", b.data, b.items[sel][1] + BLENDER_BLEND_PARAM, 0.0)
+        else:
+            sel = b.deep_copy(tmpl, overrides={CLIP_BINDINGS: bs, CLIP_NAME: b.add_string(f"{node_name(b, c)} {variable} Selector"),
+                                               SEL_GENERATORS: b.add_ptr_array(tmpl_gens, [c, c_alt])},
+                              share=("char", "hkbBlendingTransitionEffect"))
+            soff = b.items[sel][1]
+            struct.pack_into("<hh", b.data, soff + SEL_SELECTED, 0, 0)
+            b.data[soff + SEL_CAN_CHANGE] = 1
         for o in refs.get(c, []):
             struct.pack_into("<Q", b.data, o, sel)
         wrapped += 1
     out = b.build()
-    report = (f"{wrapped} selectors wrapped for variable {variable!r} (#{var}); {len(alt_of)} alternate clip generators "
+    report = (f"{wrapped} {'blenders' if kind == 'blend' else 'selectors'} wrapped for variable {variable!r} (#{var}); {len(alt_of)} alternate clip generators "
               f"for {len(anim_ids)} animations (internal ids {min(anim_ids.values()) if anim_ids else '-'}..{next_id - 1}) "
               f"in {swapped} places; {len(beh) / 1e6:.1f} -> {len(out) / 1e6:.1f} MB")
     if verbose:
