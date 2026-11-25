@@ -30,10 +30,11 @@ vanilla never shares - and appended to the CMSG's `generators` (a new array item
 orphaned: harmless, the loader only follows pointers). Pure tagfile surgery: DATA grows at the end, ITEM/PTCH are
 extended, the TYPE section is untouched.
 
-`wrap_categories` adds a runtime switch to every selector that owns a category's clips: the CMSG is replaced, at
-every reference, by an hkbManualSelectorGenerator [CMSG, copy of the CMSG with the category's clips swapped for an
-alternate category's] whose index is bound to a behavior variable (`add_variable` extends the four variable tables),
-so HKS `SetVariable(name, 0/1)` switches clip sets in place with a synced 0.33 s blend (the guns' low-ready hold).
+`wrap_alternates` adds a runtime switch to every selector that owns one of the named clips: the CMSG is replaced,
+at every reference, by an hkbManualSelectorGenerator [CMSG, copy of the CMSG with those clips swapped for their
+alternates] whose index is bound to a behavior variable (`add_variable` extends the four variable tables), so HKS
+`SetVariable(name, 0/1)` switches clips in place with a synced 0.33 s blend (the guns' low-ready hold);
+`wrap_categories` does it for whole categories.
 
 Tagfile facts used: ITEM entry = (u32 type index | flags << 24 [0x10 object, 0x20 array], u32 DATA offset, u32 count);
 pointers and hkArray data pointers in DATA are u64 item indices (an hkArray field is 16 bytes: item index, 0, 0 -
@@ -349,15 +350,16 @@ def node_name(b: Behavior, i: int) -> str:
     return ""
 
 
-def wrap_categories(beh: bytes, pairs: dict[int, int], variable: str, template_selector: str = "StanceMove_Selector",
+def wrap_alternates(beh: bytes, alternates: dict[str, str], variable: str, template_selector: str = "StanceMove_Selector",
                     verbose: bool = True) -> tuple[bytes, str]:
-    """Give every CMSG that owns clips of the categories in `pairs` (ready category -> alternate category) a
-    runtime switch: the CMSG is replaced, wherever it is referenced, by an hkbManualSelectorGenerator whose child 0
-    is the CMSG itself and child 1 a copy of it in which each ready-category clip is a clone named for the alternate
-    category (a{alt}_{anim}, fresh internal id; every other child shared). `selectedGeneratorIndex` is bound to the
-    behavior variable `variable` (added as int16 0..1 when missing), so HKS `SetVariable(variable, 1)` swaps the
-    clip set with the template selector's own transition (StanceMove_Selector: 0.33 s synced blend) while the
-    animation state stays what it is. Used for the guns' low-ready hold."""
+    """Give every CMSG that owns a clip named in `alternates` (animation name -> alternate animation name, e.g.
+    "a018_020000" -> "a018_920000") a runtime switch: the CMSG is replaced, wherever it is referenced, by an
+    hkbManualSelectorGenerator whose child 0 is the CMSG itself and child 1 a copy of it in which each named clip is
+    a clone named for its alternate (fresh internal id; every other child shared). `selectedGeneratorIndex` is bound
+    to the behavior variable `variable` (added as int16 0..1 when missing), so HKS `SetVariable(variable, 1)` swaps
+    the clips in place with the template selector's own transition (StanceMove_Selector: 0.33 s synced blend) while
+    the animation state stays what it is. Used for the guns' low-ready hold. The alternate names must be animations
+    of the same category as the originals (the engine reads a CMSG child's category from the clip name)."""
     b = Behavior(beh)
     var = add_variable(b, variable, "int16", 0, 1, 0)
     tmpl = next((i for i in b.items_of("hkbManualSelectorGenerator") if node_name(b, i) == template_selector), None)
@@ -368,7 +370,6 @@ def wrap_categories(beh: bytes, pairs: dict[int, int], variable: str, template_s
     tmpl_gens = b.ptr(tmpl_off + SEL_GENERATORS)
     if not tmpl_bs or not tmpl_gens:
         raise ValueError("template selector has no binding set / generators")
-    # the alternate clips: one clone per (ready clip, alternate category), fresh internal ids past the maximum
     clips = b.items_of("hkbClipGenerator")
     max_id = max(struct.unpack_from("<h", b.data, b.items[i][1] + CLIP_INTERNAL_ID)[0] for i in clips)
     next_id = max_id + 1
@@ -377,12 +378,11 @@ def wrap_categories(beh: bytes, pairs: dict[int, int], variable: str, template_s
     anim_ids: dict[str, int] = {}
 
     def alternate(k: int) -> int | None:
-        m = ANIM_RE.match(b.clip_anim(k))
-        if not m or int(m.group(1)) not in pairs:
+        key = alternates.get(b.clip_anim(k))
+        if key is None:
             return None
         if k in alt_of:
             return alt_of[k]
-        key = f"a{pairs[int(m.group(1))]:03d}_{int(m.group(2)):06d}"
         if key in existing:
             alt_of[k] = existing[key]
             return existing[key]
@@ -397,11 +397,10 @@ def wrap_categories(beh: bytes, pairs: dict[int, int], variable: str, template_s
         existing[key] = clone
         return clone
 
-    # reverse pointer index (DATA offset -> target) for the CMSGs we will wrap
     cmsgs = []
     for c in b.items_of("CustomManualSelectorGenerator"):
         _, ch = b.cmsg_children(c)
-        if any(b.item_type(k) == "hkbClipGenerator" and (m := ANIM_RE.match(b.clip_anim(k))) and int(m.group(1)) in pairs for k in ch):
+        if any(b.item_type(k) == "hkbClipGenerator" and b.clip_anim(k) in alternates for k in ch):
             cmsgs.append(c)
     targets = set(cmsgs)
     refs: dict[int, list[int]] = {}
@@ -410,13 +409,12 @@ def wrap_categories(beh: bytes, pairs: dict[int, int], variable: str, template_s
             t = b.ptr(o)
             if t in targets:
                 refs.setdefault(t, []).append(o)
-    wrapped = cloned = 0
+    wrapped = swapped = 0
     for c in cmsgs:
         arr, ch = b.cmsg_children(c)
         new_ch = [alternate(k) or k for k in ch]
-        cloned += sum(1 for a, k in zip(new_ch, ch) if a != k)
+        swapped += sum(1 for a, k in zip(new_ch, ch) if a != k)
         c_alt = b.deep_copy(c, overrides={CMSG_GENERATORS: b.add_ptr_array(arr, new_ch)})
-        # the selector: a copy of the template with its own binding set (variable index patched), name and children
         bs = b.deep_copy(tmpl_bs)
         barr = b.ptr(b.items[bs][1] + BINDING_SET_BINDINGS)
         _, boff, bcnt = b.items[barr]
@@ -434,10 +432,23 @@ def wrap_categories(beh: bytes, pairs: dict[int, int], variable: str, template_s
     out = b.build()
     report = (f"{wrapped} selectors wrapped for variable {variable!r} (#{var}); {len(alt_of)} alternate clip generators "
               f"for {len(anim_ids)} animations (internal ids {min(anim_ids.values()) if anim_ids else '-'}..{next_id - 1}) "
-              f"in {cloned} places; {len(beh) / 1e6:.1f} -> {len(out) / 1e6:.1f} MB")
+              f"in {swapped} places; {len(beh) / 1e6:.1f} -> {len(out) / 1e6:.1f} MB")
     if verbose:
         print(report)
     return out, report
+
+
+def wrap_categories(beh: bytes, pairs: dict[int, int], variable: str, template_selector: str = "StanceMove_Selector",
+                    verbose: bool = True) -> tuple[bytes, str]:
+    """wrap_alternates over whole categories: every clip of a category in `pairs` gets the same animation in the
+    paired category as its alternate."""
+    b = Behavior(beh)
+    alternates = {}
+    for i in b.items_of("hkbClipGenerator"):
+        m = ANIM_RE.match(b.clip_anim(i))
+        if m and int(m.group(1)) in pairs:
+            alternates[b.clip_anim(i)] = f"a{pairs[int(m.group(1))]:03d}_{int(m.group(2)):06d}"
+    return wrap_alternates(beh, alternates, variable, template_selector, verbose)
 
 
 def validate(beh: bytes) -> dict:
