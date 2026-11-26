@@ -36,6 +36,14 @@ inference rather than a measurement it says so.
 * **Writing `regulation.bin`** (`er_regulation.write_regulation`): BND4 → `dcx.compress_zstd` (Node
   `zlib.zstdCompressSync`, level 15 like the shipped file; header `DCX 0x11000 … DCP ZSTD 0x20 level`) → PKCS7 →
   AES-256-CBC with a random IV prefixed. The game loads the result (same layout as the shipped file).
+* **Merging two mods' regulations** (`er_regulation_merge.py BASE OURS THEIRS OUT`): a regulation is the whole
+  param set, so two mods that both ship one cannot coexist under Mod Engine; the merge is three-way against the
+  game's own regulation — per param, rows whose bytes only one side changed are taken from that side (added and
+  deleted rows included), rows both sides changed are decoded with the Paramdex def and merged field by field,
+  and a field both sides changed is settled by `--prefer` and listed. A param one side lacks is copied whole;
+  different row sizes mean different game versions and are refused per param. `rebuild_param(..., remove=)` drops
+  rows. Byte comparison is exact, so a mod that merely re-saved a param (Smithbox touches nothing it does not
+  change) produces no spurious takes.
 * **Bitfield packing** (both games): consecutive bitfields share a storage unit until the type changes or bits overflow; **`dummy8` bit-padding shares the byte with `u8` bits** (e.g. `u8 disableParam_NT:1` + `dummy8 reserve:7`). Getting this wrong shifts every later field by 1–2 bytes (EquipParamWeapon ER row = 664 bytes).
 * Paramdex (Mar 2026) **mislabels SwordArtsParam offset 24**: it is really the u16 **art ID** (`swordArtsTypeNew` in HKS terms), not `shieldIconType`. `swordArtsType` at offset 4 is 0 for every row.
 

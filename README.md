@@ -32,6 +32,7 @@ commits, with our fixes applied from `vendor/patches/`.
 | `tae_catalog.py TAE…` | One line per animation: bullets, FFX, sounds, SpEffects, flags |
 | `tae_template.py GAME [event ids]` | DSAnimStudio event definitions (field layouts, enums) for DS1/DS3/ER/… |
 | `er_regulation.py regulation.bin OUT.parambnd` | Decrypt + decompress Elden Ring's regulation into a raw BND4; `write_regulation(bnd_bytes)` packs it back (ZSTD + AES) |
+| `er_regulation_merge.py BASE OURS THEIRS OUT.bin` | Three-way merge of regulation.bin files (vanilla / this mod / another mod): rows changed by only one side taken as they are, rows changed by both merged field by field (Paramdex defs), same-field clashes reported and settled by `--prefer` |
 | `er_param.py BND Param ids…` | Decode Elden Ring PARAM rows (Paramdex defs + row names); `encode_row` / `rebuild_param` add or replace rows (64-bit PARAM writer) |
 | `ds1_anim_load.py HKX…` | Load DS1 animations, including Havok Content Tools exports |
 | `convert_anim_ds1_to_er.py [--verify] OUT_DIR HKX…` | Convert DS1 (hk2010) animations to Elden Ring (hk2018) tagfiles |

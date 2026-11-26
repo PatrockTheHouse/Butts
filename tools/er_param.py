@@ -156,8 +156,9 @@ def encode_row(template: bytes, fields, values: dict) -> bytes:
     return bytes(data)
 
 
-def rebuild_param(buf: bytes, new_rows: dict[int, bytes]) -> bytes:
-    """Return the 64-bit PARAM `buf` with `new_rows` ({id: row bytes}) added or replaced, rows kept sorted by id.
+def rebuild_param(buf: bytes, new_rows: dict[int, bytes], remove=()) -> bytes:
+    """Return the 64-bit PARAM `buf` with `new_rows` ({id: row bytes}) added or replaced and the ids in `remove`
+    dropped, rows kept sorted by id.
 
     Layout written (as Elden Ring's files): 0x40 header | 24-byte row entries | row data | strings block (param type
     name + the shared empty row name), with every row-name offset remapped into the moved strings block."""
@@ -178,6 +179,8 @@ def rebuild_param(buf: bytes, new_rows: dict[int, bytes]) -> bytes:
         if len(data) != row_size:
             raise ValueError(f"row {rid}: {len(data)} bytes, param rows are {row_size}")
         rows[rid] = (data, rows[rid][1] if rid in rows else default_noff)
+    for rid in remove:
+        rows.pop(rid, None)
     ids = sorted(rows)
     if len(ids) > 0xFFFF:
         raise ValueError("too many rows")
