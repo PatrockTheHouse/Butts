@@ -177,24 +177,123 @@ def add_sheet(sblytbnd: bytes, tpf: bytes, stem: str, sheet_rgba: np.ndarray, en
 
 
 def overwrite_icon(sblytbnd: bytes, tpf: bytes, icon_id: int, rgba: np.ndarray) -> bytes:
-    """Paint `rgba` over an existing icon's rectangle in its sheet (the whole sheet is re-encoded in its own format).
-    Returns the new TPF bytes."""
+    """Paint `rgba` over an existing icon's rectangle in its sheet, in place (only that rectangle's compressed blocks
+    change, see splice_blocks). Returns the new TPF bytes."""
     hit = find_icon(sblytbnd, icon_id)
     if hit is None:
         raise KeyError(f"icon {icon_id} is in no layout")
     stem, e = hit
     t = TPF.from_bytes(tpf)
     tex = next(x for x in t.textures if x.stem == stem)
-    info = dds_tools.header_info(tex.data)
-    img = np.array(dds_tools.decode(tex.data))
     icon = fit_icon(rgba, e["width"], margin=0) if rgba.shape[:2] != (e["height"], e["width"]) else rgba
-    img[e["y"]:e["y"] + e["height"], e["x"]:e["x"] + e["width"]] = icon[..., :4] if icon.shape[2] == 4 else _with_alpha(icon)
-    fmt = ({b"DXT1": "DXT1", b"DXT5": "DXT5"}.get(info.get("fourcc")) or ("BC7" if info.get("dxgi_format") in (98, 99) else "DXT5"))
-    dds = bytearray(dds_tools.encode(img, fmt=fmt, mipmaps=info.get("mipmaps", 1) > 1, srgb=False, dx10=(fmt == "BC7")))
-    struct.pack_into("<I", dds, 24, struct.unpack_from("<I", tex.data, 24)[0])
-    tex.data = bytes(dds)
-    tex.mipmap_count = max(1, dds_tools.header_info(tex.data).get("mipmaps", 1))
+    tex.data = splice_blocks(tex.data, {(e["x"], e["y"]): icon})
     return bytes(t)
+
+
+# ---------------------------------------------------------------------------------------------------- in-place sheets
+# The other way to add icons: free cells of a sheet the game already has. Vanilla icon sheets are a grid of 160 px
+# cells at a 164 px pitch (4 px gutters; SB_Icon_03_A, 2048x2048: 12x12 cells, ~108 used), so a handful of icons fit
+# in the spare columns. Only the sheet's compressed blocks under those cells and its layout's SubTexture list
+# change - no new texture, no new layout file - which keeps the result inside what the game demonstrably loads.
+CELL_PITCH = ICON + 4
+
+
+def sheet_format(info: dict) -> str:
+    return ({b"DXT1": "DXT1", b"DXT5": "DXT5"}.get(info.get("fourcc"))
+            or ("BC7" if info.get("dxgi_format") in (98, 99) else None) or "DXT5")
+
+
+def splice_blocks(dds: bytes, patches: dict[tuple[int, int], np.ndarray]) -> bytes:
+    """Replace rectangles of a block-compressed, single-mip DDS with freshly encoded RGBA images, in place.
+    patches: (x, y) -> HxWx4 uint8; x, y, W, H must be multiples of the 4 px block. Everything else is untouched."""
+    info = dds_tools.header_info(dds)
+    if info["mipmaps"] > 1:
+        raise ValueError("splice_blocks: the sheet has mip levels; only the top level would be patched")
+    bs, off, width, height = info["block_bytes"], info["data_offset"], info["width"], info["height"]
+    if not bs:
+        raise ValueError(f"splice_blocks: not a block-compressed DDS ({info.get('fourcc')}, dxgi {info.get('dxgi_format')})")
+    fmt = sheet_format(info)
+    row_pitch = (width // 4) * bs
+    out = bytearray(dds)
+    for (x, y), img in patches.items():
+        h, w = img.shape[:2]
+        if any(v % 4 for v in (x, y, w, h)) or x + w > width or y + h > height:
+            raise ValueError(f"splice_blocks: rectangle ({x},{y}) {w}x{h} is not block-aligned inside {width}x{height}")
+        rgba = img[..., :4] if img.shape[2] == 4 else _with_alpha(img)
+        piece = dds_tools.encode(np.ascontiguousarray(rgba), fmt=fmt, mipmaps=False, srgb=False, dx10=(fmt == "BC7"))
+        pinfo = dds_tools.header_info(piece)
+        pdata = piece[pinfo["data_offset"]:]
+        prow = (w // 4) * bs
+        for by in range(h // 4):
+            dst = off + (y // 4 + by) * row_pitch + (x // 4) * bs
+            out[dst:dst + prow] = pdata[by * prow:(by + 1) * prow]
+    return bytes(out)
+
+
+def free_cells(layouts: list[dict], size: tuple[int, int], cell: int = ICON, pitch: int = CELL_PITCH) -> list[tuple[int, int]]:
+    """Grid cells (x, y) on the sheet's `pitch` grid that no SubTexture of any of the given parsed layouts touches,
+    rightmost column first (the vanilla sheets fill from the left, so the spare columns are on the right)."""
+    w, h = size
+    used = [(e["x"], e["y"], e["x"] + e["width"], e["y"] + e["height"]) for lyt in layouts for e in lyt["entries"]]
+    cells = []
+    for x in range((w - cell) // pitch * pitch, -1, -pitch):
+        for y in range(0, h - cell + 1, pitch):
+            if not any(ux < x + cell and x < ux2 and uy < y + cell and y < uy2 for ux, uy, ux2, uy2 in used):
+                cells.append((x, y))
+    return cells
+
+
+def _append_subtextures(xml: bytes, entries: list[dict]) -> bytes:
+    """New SubTexture lines in the file's own style (newline, indentation, `/>` vs ` />`), before the closing tag."""
+    text = xml.decode("utf-8-sig")
+    hits = list(re.finditer(r"(\r?\n)([ \t]*)<SubTexture\b[^>]*?(\s*/>)", text))
+    if not hits:
+        raise ValueError("layout has no SubTexture lines to match the style of")
+    nl, indent, close = hits[-1].group(1), hits[-1].group(2), hits[-1].group(3)
+    half = re.search(r'half="([^"]*)"', hits[-1].group(0))
+    lines = []
+    for e in entries:
+        attrs = f'name="{e["name"]}" x="{e["x"]}" y="{e["y"]}" width="{e["width"]}" height="{e["height"]}"'
+        if half:
+            attrs += f' half="{e.get("half", half.group(1))}"'
+        lines.append(f"{nl}{indent}<SubTexture {attrs}{close}")
+    pos = hits[-1].end()
+    return (text[:pos] + "".join(lines) + text[pos:]).encode("utf-8")
+
+
+def splice_icons(sblytbnd: bytes, tpf: bytes, stem: str, icons: dict[int, np.ndarray],
+                 cells: list[tuple[int, int]] | None = None) -> tuple[bytes, bytes, dict[int, tuple[int, int]]]:
+    """Put icons into free cells of the existing sheet `stem`: its layout gets the SubTexture entries, its texture
+    the icons' blocks. `cells` fixes the placement (e.g. the same cells for the hi and the low pair); by default the
+    free cells of this binder's layout are used. Returns (sblytbnd, tpf, {icon_id: (x, y)})."""
+    bnd = BND4.read(sblytbnd)
+    entry = bnd.get(stem + ".layout")
+    if entry is None:
+        raise KeyError(f"{stem}.layout is not in the sblytbnd")
+    lyt = parse_layout(entry.data)
+    t = TPF.from_bytes(tpf)
+    tex = next((x for x in t.textures if x.stem == stem), None)
+    if tex is None:
+        raise KeyError(f"{stem} is not in the TPF")
+    info = dds_tools.header_info(tex.data)
+    if cells is None:
+        cells = free_cells([lyt], (info["width"], info["height"]))
+    if len(cells) < len(icons):
+        raise ValueError(f"{stem}: {len(cells)} free cells for {len(icons)} icons")
+    have = {e["name"] for e in lyt["entries"]}
+    placed, entries, patches = {}, [], {}
+    for (icon_id, img), (x, y) in zip(sorted(icons.items()), cells):
+        name = SUBTEXTURE_NAME.format(icon_id=icon_id)
+        if name in have:
+            raise ValueError(f"{stem}.layout already has {name}")
+        if img.shape[0] != ICON or img.shape[1] != ICON:
+            img = fit_icon(img, ICON, margin=0)
+        placed[icon_id] = (x, y)
+        entries.append({"name": name, "x": x, "y": y, "width": ICON, "height": ICON})
+        patches[(x, y)] = img
+    entry.data = _append_subtextures(entry.data, entries)
+    tex.data = splice_blocks(tex.data, patches)
+    return bnd.write(), bytes(t), placed
 
 
 def describe(sblytbnd: bytes, tpf: bytes | None = None) -> str:

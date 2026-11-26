@@ -211,6 +211,20 @@ animation HKX in the `c0000_a?x.anibnd.dcx` divs with id = category·1,000,000 +
 and the DS1 engine finds HKX in any loaded div). DCX/DFLT (zlib level 9, header 0x4C) is accepted by Elden Ring.
 ER `.param` files carry **no ParamType string**; `er_param.py` maps file names to Paramdex defs (`DEF_ALIASES`).
 
+### ER menu icons — `menu/{hi,low}/01_common.sblytbnd.dcx` + `01_common.tpf.dcx` (`tools/er_icons.py`)
+`EquipParam*.iconId` → SubTexture `MENU_ItemIcon_{id:05d}.png` in one of the `.layout` XML files of the sblytbnd
+(`<TextureAtlas imagePath="SB_Icon_03_A.png">` + `<SubTexture name=... x y width height half="0"/>`) → the TPF
+texture of the same stem. Both pairs exist (hi/low; the low layouts use the same coordinates and the icon sheets
+are full size there too — only some UI textures are smaller). Vanilla sheets: BC7 (DX10 dxgi 98, TPF format 102,
+flags 0, type 0), one mip level, DDS flags 0x81007 (DirectXTex re-saves write 0xA1007 — both load), 4096×2048 /
+2048×2048 / 1024×956 (non-power-of-two widths exist in modded packs: 4736, 4896, 5056); 160 px icons on a 164 px
+pitch (4 px gutters). Modded packs add sheets of their own at the end of both binders (DSLRNet: hi only, ids from
+42000; Clever's modpack: `SB_Icon_CLV_A` etc. at TPF indices 70+, ids 8002–45944) — entry counts beyond 64 are
+fine. `splice_icons` is the conservative route: SubTexture lines appended to an existing layout in its own text
+style and only the 4×4 blocks under the chosen cells re-encoded (`splice_blocks`; the rest of the sheet stays
+byte-identical); `free_cells` lists the unused grid cells (rightmost column first). Diagnostics seen in game:
+a known icon whose texture is missing draws a **green square in the HUD** and nothing in the inventory.
+
 ## 4. Ashes of War (verified in regulation + HKS)
 * Gem (`EquipParamGem`) → `swordArtsParamId` → `SwordArtsParam` row → **art ID** (u16 @ offset 24) → **TAE a(600 + artID)** holding the skill animations (one TAE per art; 304 present a600–a999).
 * Slot IDs inside the art TAE: 040000 start, 040005 start-without-FP, 040010/040015 follow-ups, 040050+ stance arts, 040080+ rolling; weapon-size variants are offsets (+200 large, +300 polearm, +5900 small shield…) chosen in HKS `GetSwordArtsDiffCategory`. Arts **not in the HKS table default to the single base animation** (nil-safe in the community HKS), and `SwordArtPutOppositeWeapon` is nil-safe too → a new art needs **no HKS edits**.
