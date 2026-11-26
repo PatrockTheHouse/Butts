@@ -151,7 +151,17 @@ Cross-category imports are normal (a235 Spread Crossbow imports `46033030` from 
   So a switch goes *above* the CMSG: `wrap_categories` replaces the CMSG at every reference (StateInfo.generator
   +96, selector/blender generator arrays, `hkbBlenderGeneratorChild.generator` +64, `hkbLayer.generator` +64,
   `hkbGeneratorTransitionEffect` +184) with a selector [CMSG, copy with the category's clips swapped]. 428 CMSGs
-  own the a016 hold-style clips; 12 of them are referenced twice.
+  own the a016 hold-style clips; 12 of them are referenced twice. `wrap_alternates` does the same per clip name
+  (base clip → alternate clip, both in the same category) and with `kind="blend"` uses a deep copy of the vanilla
+  parametric `Move Blend` (`hkbBlenderGenerator`, flags 0x11 sync|parametric, `blendParameter` bound to a real
+  variable, children at parameters 0 / 1) instead of a selector.
+* In-game caveat (four builds, Elden Ring 1.16): a real variable written from the HKS `Update()` hook every frame —
+  a new variable, the engine-computed `TEST_PoseTwist_Spine_Rot`, or the script-only `EaseInOutTargetVal1` — never
+  visibly moved a wrapped blender while the character stood or walked; the switch was only ever "seen" at state
+  changes, and those sightings turned out to be the clips' own first/last frames. The variable switches known to
+  work are vanilla's (`MoveType` ramped by `SetMoveType()` from the state functions, `IndexGuardStyle`), so a
+  reliable switch probably has to be written from the state function of the states that own the wrapped clips,
+  not from `Update()`. Unresolved; the mod that needed it now bakes the pose into the clips instead.
 
 ### ER crossbow slots (TAE a46) — names from Smithbox's `Behavior-c0000-c0000.json` aliases
 | IDs | State |
